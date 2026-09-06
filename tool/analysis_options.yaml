@@ -1,0 +1,6 @@
+# Command-line tooling prints to stdout by design.
+include: ../analysis_options.yaml
+
+linter:
+  rules:
+    avoid_print: false
