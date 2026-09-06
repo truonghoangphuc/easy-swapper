@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/session/game_session.dart';
 import '../../game/swapper_game.dart';
+import '../../services/leaderboard_service.dart';
 import '../theme/app_theme.dart';
 
 class Hud extends StatelessWidget {
@@ -43,6 +44,22 @@ class Hud extends StatelessWidget {
                       highlight: !game.level.isEndless && moves <= 5,
                     ),
                   ),
+                ),
+                if (LeaderboardService.isSupported) ...[
+                  const SizedBox(width: 8),
+                  _IconChip(
+                    icon: Icons.leaderboard_rounded,
+                    tooltip: 'Leaderboard',
+                    onPressed: LeaderboardService.showLeaderboard,
+                    active: false,
+                  ),
+                ],
+                const SizedBox(width: 8),
+                _IconChip(
+                  icon: Icons.help_outline_rounded,
+                  tooltip: 'How to play',
+                  onPressed: game.toggleHelp,
+                  active: false,
                 ),
                 const SizedBox(width: 8),
                 _SoundToggle(game: game),
@@ -114,21 +131,42 @@ class _SoundToggle extends StatelessWidget {
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
       valueListenable: game.soundOn,
-      builder: (_, on, _) => IconButton(
-        onPressed: game.toggleSound,
+      builder: (_, on, _) => _IconChip(
+        icon: on ? Icons.volume_up_rounded : Icons.volume_off_rounded,
         tooltip: on ? 'Mute' : 'Unmute',
-        icon: Icon(
-          on ? Icons.volume_up_rounded : Icons.volume_off_rounded,
-          color: on ? AppColors.accent : AppColors.textDim,
+        onPressed: game.toggleSound,
+        active: on,
+      ),
+    );
+  }
+}
+
+class _IconChip extends StatelessWidget {
+  const _IconChip({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+    required this.active,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      onPressed: onPressed,
+      tooltip: tooltip,
+      icon: Icon(icon, color: active ? AppColors.accent : AppColors.textDim),
+      style: IconButton.styleFrom(
+        backgroundColor: AppColors.boardBackground,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: AppColors.gridLine, width: 1.5),
         ),
-        style: IconButton.styleFrom(
-          backgroundColor: AppColors.boardBackground,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: const BorderSide(color: AppColors.gridLine, width: 1.5),
-          ),
-          padding: const EdgeInsets.all(14),
-        ),
+        padding: const EdgeInsets.all(14),
       ),
     );
   }

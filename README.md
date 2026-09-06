@@ -15,6 +15,14 @@ compact, new tiles drop in, and cascades chain.
   8  6  1  +  5  3  9  2
 ```
 
+## Documents
+
+| | |
+| --- | --- |
+| [HELP.md](HELP.md) | How to play — the rules, in full |
+| [STORE.md](STORE.md) | Store listing copy, screenshots, categories |
+| [RELEASE.md](RELEASE.md) | What must be set up before shipping. **Read the blockers first** |
+
 ## Running it
 
 ```bash
@@ -100,6 +108,43 @@ The playout tool exists because these rules can quietly strangle the game. An
 early version held the no-adjacent rule absolutely and runs died of deadlock
 after eight moves; with the floors and slot planning they survive 200 to 270.
 
+## The next-drop preview
+
+A strip above the board shows one brick per column - the tile that will drop
+into that column next, at the same size it will be when it lands. It is a real
+queue: that exact brick arrives, and it leads, coming to rest at the bottom of
+whatever gap the clear leaves.
+
+Column alignment is not free, and the playout tool measures the price. A brick
+is committed to its column a turn before anyone knows which *row* it lands in,
+so the refill cannot vet it against its neighbours the way it vets a live fill.
+The only defence left is choosing **which columns** receive operators, which
+`GameSession.replenishQueue` does by neighbourhood crowding. Drawing per column
+blindly instead - the obvious implementation - cost three quarters of the
+board's playable life.
+
+What it costs as built, tier 2 with bombs, mean moves before a deadlock:
+
+| preview | none | per-column |
+| --- | --- | --- |
+| moves survived | 252 | 192 |
+| operators beside another | ~30% | ~47% |
+
+The adjacency figure is the honest cost of the alignment. It can be pushed back
+down by thinning the operators on the board, and the tool shows the
+tenth-percentile run falling with it - a board that wipes is worse than one that
+is untidy.
+
+Two details that only matter once tiles are committed in advance, both of which
+were bugs first:
+
+- The cap counts board **plus** queue, so committed tiles can never overshoot
+  it. The floors count the board **alone** - a queued operator has not landed
+  yet, and treating it as if it had left the board starved while the queue held
+  the difference.
+- A cascade refills once per link and tops the preview up between them, so only
+  the first refill of a turn draws from what the player saw before it.
+
 ## Running out of moves
 
 A deadlock does not reshuffle. It announces itself, wipes the score and the
@@ -136,6 +181,8 @@ resolves the whole grid at once.
   deliberately near-worthless, so players chase longer runs; objectives ask for
   length rather than forbidding short runs. Raising the minimum to 5 does not
   survive the operator cap - see the comment in `core/levels/level_data.dart`.
+- Bomb tiles are drawn as vector art, not written as an emoji glyph: the bomb
+  codepoint renders as a tofu box on Windows and is illegible at preview size.
 - Score is `cells × multiplier` (compound ×3, exponent ×4, mul/div ×5, stacking)
   plus length tiers added afterwards, never scaled by the multiplier.
 
@@ -170,10 +217,14 @@ plugin, not from this code, and are harmless.
 | 0 | Scaffold | done |
 | 1 | Core engine, headless | done — 93 core tests |
 | 2 | Playable board | done — drag/tap to swap, cascade, refill; 10 widget tests |
-| 3 | Juice | glass blocks, shatter, shockwaves, Sour Gummy feedback text, sound |
+| 3 | Juice | glass blocks, shatter, shockwaves, bundled Sour Gummy text, sound |
 | 4 | Levels and meta | 20 levels defined; level select and persistence pending |
 | 5 | Specials | bomb done; row/column/wildcard specials not started |
-| 6 | Polish | not started |
+| 6 | Polish | ads, leaderboards, in-game help and store copy done; icon and signing outstanding |
 
 Level select and persistence of progress (Phase 4) are the main gap: the twenty
 levels are defined but only endless mode is reachable from the UI.
+
+Before shipping, work through [RELEASE.md](RELEASE.md). The tree is currently
+signed with the debug key, has no app icon, and every AdMob and leaderboard
+identifier is a placeholder.

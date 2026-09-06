@@ -1,6 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- AdMob and Play Games both need the network. Flutter grants INTERNET
+         automatically in debug and profile but NOT in release, so without this
+         a release build silently loses both. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Read by the Google Mobile Ads SDK for personalised-ads consent. -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID"/>
+
     <application
-        android:label="easy_swapper"
+        android:label="Easy Swapper"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -30,6 +37,24 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- AdMob application id. This is Google's public demo id: the app will
+             serve test ads and earn nothing. Replace with the real one from the
+             AdMob console before release - the SDK crashes on startup if the
+             value is missing or malformed, so it cannot simply be left blank. -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-3940256099942544~3347511713"/>
+
+        <!-- Play Games Services application id, from Play Console. Until a real
+             project exists this is a placeholder and sign-in will fail
+             gracefully; the game does not depend on it. -->
+        <meta-data
+            android:name="com.google.android.gms.games.APP_ID"
+            android:value="@string/games_app_id"/>
+        <meta-data
+            android:name="com.google.android.gms.version"
+            android:value="@integer/google_play_services_version"/>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

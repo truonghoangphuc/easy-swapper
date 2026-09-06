@@ -122,13 +122,13 @@ class TileGenerator {
   /// runs were dying of deadlock after about eight moves. Below this floor a
   /// refill is forced to hand back a comparison even if that puts two operators
   /// side by side; keeping the board playable beats keeping the layout tidy.
-  static const double comparisonFloorFraction = 0.18;
+  static const double comparisonFloorFraction = 0.19;
 
   /// Floor on operators of any kind, as a fraction of the board.
   ///
   /// Longer runs need two operators inside one window - `_ + _ = _` - so the
   /// board has to hold a working stock, not merely stay under the cap.
-  static const double operatorFloorFraction = 0.22;
+  static const double operatorFloorFraction = 0.23;
 
   final OperatorSet operators;
   final TileIdGenerator ids;
@@ -230,8 +230,19 @@ class TileGenerator {
       (width * height * operatorCapFraction).floor();
 
   /// The fewest comparison glyphs a board should be left holding.
+  ///
+  /// A tier with only `=` needs more of them than one with `<` and `>`. An
+  /// inequality between two random numbers is true about half the time, while
+  /// equality almost never is, so the same count of comparison glyphs buys far
+  /// fewer legal moves - which is why tier 1 was the tier that suffered most
+  /// once the preview started committing tiles in advance.
   int comparisonFloorFor(int width, int height) {
-    final floor = (width * height * comparisonFloorFraction).round();
+    final hasInequality =
+        operators.comparison.contains('<') || operators.comparison.contains('>');
+    final fraction = hasInequality
+        ? comparisonFloorFraction
+        : comparisonFloorFraction * 1.35;
+    final floor = (width * height * fraction).round();
     return floor < 3 ? 3 : floor;
   }
 

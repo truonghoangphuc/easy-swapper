@@ -1,11 +1,11 @@
 {
-    "name": "easy_swapper",
-    "short_name": "easy_swapper",
+    "name": "Easy Swapper",
+    "short_name": "Easy Swapper",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Swap the bricks to build real equations. Match three with actual arithmetic.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

@@ -10,6 +10,7 @@ import '../board/board_model.dart';
 import '../board/move_solver.dart';
 import '../board/tile.dart';
 import '../board/tile_generator.dart';
+import '../board/tile_queue.dart';
 import '../levels/level_def.dart';
 import '../rules/scoring.dart';
 
@@ -114,11 +115,41 @@ class GameSession {
               width: level.width,
               height: level.height,
               minRunLength: level.minRunLength,
-            );
+            ) {
+    // Primed here, not on the first refill: the preview is on screen from the
+    // moment the board is, and an empty strip would read as a bug.
+    replenishQueue();
+  }
 
   final LevelDef level;
   final TileGenerator generator;
   final BoardModel board;
+
+  /// The tile waiting to enter each column, shown to the player as the next
+  /// drop. Primed on the first turn and topped up after every one.
+  late final TileQueue queue = TileQueue(board.width);
+
+  /// How many tiles the preview commits to in advance.
+  ///
+  /// This is a direct trade against playability, and the tool measures it: every
+  /// committed tile is one the refill can no longer adapt to the cell it lands
+  /// in. Anything past the queue falls through to the live fill, which can.
+  /// Four, not a full row. The sweep in `tool/tune_weights.dart playout` is
+  /// unambiguous: every committed tile is one the refill can no longer place
+  /// intelligently, and at a full row of eight the board lost roughly half its
+  /// playable life and most of its operator spacing. Four covers a typical
+  /// turn's holes while leaving the tail adaptive.
+  /// The preview holds one tile per column, so its length is the board width.
+
+  /// How many operators the preview may hold at once, regardless of how long
+  /// the preview is.
+  ///
+  /// Deliberately not a fraction of [previewLength]: tying the two together
+  /// meant a longer preview also allowed a bigger restock burst, and four
+  /// comparisons landing in one turn cannot all find a cell with room - they
+  /// arrive as a clump. Two at a time gets the same supply in, spread over
+  /// turns, into cells that can hold them apart.
+  static const int maxOperatorBurst = 1;
 
   SessionPhase phase = SessionPhase.idle;
 
@@ -127,6 +158,12 @@ class GameSession {
   int equationsCleared = 0;
   int longestChain = 0;
   int bombsDetonated = 0;
+
+  /// The score the last wiped run reached.
+  ///
+  /// A deadlock zeroes [score], but the run still happened and is still worth
+  /// submitting to a leaderboard - so the figure is kept here rather than lost.
+  int lastRunScore = 0;
 
   /// How many times each glyph has appeared in a cleared equation.
   final Map<String, int> operatorUses = {};
@@ -335,49 +372,85 @@ class GameSession {
   /// Refills the board, holding the same composition rules generation does:
   /// bombs capped, operators under budget, and as few side by side as possible.
   ///
-  /// Restocking is *planned* rather than taken as slots come up. Filling in
-  /// column order and placing an operator wherever the budget happened to be
-  /// short put roughly a third of them next to each other, because most refill
-  /// slots sit beside an existing operator. Choosing the emptiest-surrounded
-  /// cells first keeps the same supply with a fraction of the clumping.
+  /// Each column's first hole receives the tile the preview promised it. That
+  /// commitment is made a turn early, so the refill cannot vet a queued tile
+  /// against the cell it lands in - only the leftover holes get that treatment.
+  /// Which columns are handed operators in the first place is chosen in
+  /// [replenishQueue], and that is where the spacing is actually defended.
   List<TileSpawn> _refill() {
-    var bombs = board.bombCells().length;
     final cap = generator.operatorCapFor(board.width, board.height);
-    // Never negative: the board can already be at or over the cap, and clamp
-    // throws when its upper bound falls below its lower one.
-    final room = (cap - board.operatorCount()).clamp(0, cap);
+
+    // The cell each column fills *first*: the bottom-most hole, not the
+    // top-most. Tiles fall in, so the next one to drop leads and comes to rest
+    // deepest while the rest stack on it.
+    final assignment = <Coord, Tile>{};
+    for (var x = 0; x < board.width; x++) {
+      final tile = queue.peek(x);
+      if (tile == null) continue;
+      for (var y = board.height - 1; y >= 0; y--) {
+        if (board.at(x, y) != null) continue;
+        assignment[Coord(x, y)] = tile;
+        queue.take(x);
+        break;
+      }
+    }
+
+    // Everything else falls to the planner, which can see the cell it fills.
+    final unplanned = board
+        .emptyCells()
+        .where((c) => !assignment.containsKey(c))
+        .toList()
+      ..sort(
+        (a, b) => board
+            .operatorNeighbourCount(a)
+            .compareTo(board.operatorNeighbourCount(b)),
+      );
+
+    // Everything the assignment will place counts from the start. The fill
+    // interleaves assigned cells with live ones, so counting a queued bomb only
+    // when its cell comes up let a live cell slip one in first and put four on
+    // a board capped at three.
+    var bombs = board.bombCells().length +
+        assignment.values.where((t) => t.isBomb).length;
+    var operators =
+        board.operatorCount() + assignment.values.where(isOperator).length;
 
     final needComparison =
         generator.comparisonFloorFor(board.width, board.height) -
-            board.comparisonCount();
+            board.comparisonCount() -
+            assignment.values
+                .where((t) => t.kind == TileKind.comparison)
+                .length;
     final needOperator =
-        generator.operatorFloorFor(board.width, board.height) -
-            board.operatorCount();
+        generator.operatorFloorFor(board.width, board.height) - operators;
+    final spare = (cap - operators).clamp(0, cap);
 
-    final empties = board.emptyCells();
-    // Comparisons may take a crowded slot if that is all there is: running out
-    // of them kills the board. Plain operators may not - they are a
-    // convenience, and adjacent operators are sediment, since a clumped one is
-    // unlikely to be part of a run and so never gets cleared away.
     final comparisonSlots = _planSlots(
-      empties,
-      needed: needComparison.clamp(0, room),
+      unplanned,
+      needed: needComparison.clamp(0, spare),
       skipCorners: true,
       relaxIfShort: true,
     );
-    final operatorRoom = (room - comparisonSlots.length).clamp(0, room);
+    final operatorRoom = (spare - comparisonSlots.length).clamp(0, spare);
     final operatorSlots = _planSlots(
-      empties,
+      unplanned,
       needed: (needOperator - comparisonSlots.length).clamp(0, operatorRoom),
       skipCorners: false,
       taken: comparisonSlots,
       relaxIfShort: false,
     );
 
-    var operators = board.operatorCount();
-    final reserved = {...comparisonSlots, ...operatorSlots};
+    final reserved = {
+      ...comparisonSlots,
+      ...operatorSlots,
+      for (final entry in assignment.entries)
+        if (isOperator(entry.value)) entry.key,
+    };
 
-    return board.refill((at) {
+    final spawns = board.refill((at) {
+      final promised = assignment[at];
+      if (promised != null) return promised;
+
       if (comparisonSlots.contains(at)) {
         operators++;
         return generator.nextComparison();
@@ -393,13 +466,94 @@ class GameSession {
           !reserved.any(at.isAdjacentTo);
 
       final tile = generator.nextRefillTile(
-        allowBomb: bombs < maxBombsOnBoard,
+        allowBomb: bombs + queue.bombCount() < maxBombsOnBoard,
         allowOperator: operators < cap && clear,
       );
       if (tile.isBomb) bombs++;
       if (isOperator(tile)) operators++;
       return tile;
     });
+
+    replenishQueue();
+    return spawns;
+  }
+
+  /// Tops the preview back up, one tile per empty column.
+  ///
+  /// The interesting decision is *which* columns get the operators. A queued
+  /// tile is committed to its column before its row is known, so it cannot be
+  /// checked against its neighbours the way a live fill can; the compensation is
+  /// to hand operators to the columns whose neighbourhoods hold fewest already.
+  /// Drawing blindly per column instead left half the board's operators clumped
+  /// against each other.
+  ///
+  /// Budgets use opposite accounting on purpose. The cap counts the board *plus*
+  /// the queue, so committed tiles can never overshoot it - between queueing and
+  /// dropping a board only ever loses operators, to matches. The floors count
+  /// the board alone: a queued operator has not landed yet, and treating it as
+  /// if it had left the board starved while the queue held the difference.
+  void replenishQueue() {
+    final columns = queue.emptyColumns();
+    if (columns.isEmpty) return;
+
+    final cap = generator.operatorCapFor(board.width, board.height);
+    final comparisonFloor =
+        generator.comparisonFloorFor(board.width, board.height);
+    final operatorFloor =
+        generator.operatorFloorFor(board.width, board.height);
+
+    var operators = board.operatorCount() + queue.operatorCount();
+    var comparisons = board.comparisonCount();
+    var boardOperators = board.operatorCount();
+
+    // How many of these slots should carry an operator, and how many of those
+    // must be comparisons.
+    var wantComparison = 0;
+    var wantOperator = 0;
+    for (var i = 0; i < columns.length; i++) {
+      if (operators + wantOperator >= cap) break;
+      if (wantOperator >= maxOperatorBurst) break;
+      if (comparisons + wantComparison < comparisonFloor) {
+        wantComparison++;
+        wantOperator++;
+        continue;
+      }
+      if (boardOperators + wantOperator < operatorFloor) {
+        wantOperator++;
+        continue;
+      }
+      break;
+    }
+
+    // Least crowded columns first, so the operators go where they have room.
+    final ranked = [...columns]
+      ..sort((a, b) => board.columnCrowding(a).compareTo(board.columnCrowding(b)));
+
+    for (var i = 0; i < ranked.length; i++) {
+      final column = ranked[i];
+      if (i < wantComparison) {
+        queue.fill(column, generator.nextComparison());
+        comparisons++;
+        operators++;
+        boardOperators++;
+        continue;
+      }
+      if (i < wantOperator) {
+        final tile = generator.nextOperator();
+        if (tile.kind == TileKind.comparison) comparisons++;
+        queue.fill(column, tile);
+        operators++;
+        boardOperators++;
+        continue;
+      }
+
+      if (board.bombCells().length + queue.bombCount() < maxBombsOnBoard &&
+          generator.rng.nextDouble() < generator.bombChance) {
+        queue.fill(column, Tile.bomb(generator.ids.nextId()));
+        continue;
+      }
+      queue.fill(column, generator.nextDigit());
+    }
   }
 
   /// Picks [needed] refill slots to hold an operator, preferring cells with no
@@ -465,6 +619,7 @@ class GameSession {
   /// The board is rebuilt in place so the render layer keeps the same
   /// [BoardModel] instance and can just resync from it.
   void resetAfterDeadlock() {
+    lastRunScore = score;
     score = 0;
     equationsCleared = 0;
     longestChain = 0;
@@ -483,6 +638,9 @@ class GameSession {
         board.set(x, y, fresh.at(x, y));
       }
     }
+
+    queue.clear();
+    replenishQueue();
   }
 
   void _judge(bool wasReset) {

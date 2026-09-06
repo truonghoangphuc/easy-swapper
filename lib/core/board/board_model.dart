@@ -247,6 +247,27 @@ class BoardModel {
   /// True if any orthogonal neighbour of [at] already holds an operator.
   bool hasOperatorNeighbour(Coord at) => operatorNeighbourCount(at) > 0;
 
+  /// Operators in column [x] and in the columns either side of it.
+  ///
+  /// A queued tile is committed to a column before its row is known, so this is
+  /// the best available guess at whether an operator dropped there would land
+  /// next to another one.
+  int columnCrowding(int x) {
+    var count = 0;
+    for (var col = x - 1; col <= x + 1; col++) {
+      if (col < 0 || col >= width) continue;
+      for (var y = 0; y < height; y++) {
+        // Every row counts the same. Weighting the upper rows - where the holes
+        // are, after a column compacts - looked like the better proxy and
+        // measured worse: adjacency rose from 47% to 57%, because a queued tile
+        // waits for its column and can land long after the shape that suggested
+        // the weighting has gone.
+        if (isOperator(at(col, y))) count++;
+      }
+    }
+    return count;
+  }
+
   /// Coordinates of every operator with an operator orthogonally beside it.
   List<Coord> adjacentOperators() => [
         for (var y = 0; y < height; y++)
@@ -291,17 +312,25 @@ class BoardModel {
     return falls;
   }
 
-  /// Fills every empty cell from [factory], top-down per column.
+  /// Fills every empty cell from [factory], bottom-up per column.
+  ///
+  /// Bottom-up is the physical order: the next tile to drop leads and settles
+  /// deepest, and later ones stack above it. That order is what the next-drop
+  /// preview promises, so it is not an implementation detail.
   List<TileSpawn> refill(TileFactory factory) {
     final spawns = <TileSpawn>[];
     for (var x = 0; x < width; x++) {
-      var dropDistance = 1;
+      var filled = 0;
       for (var y = height - 1; y >= 0; y--) {
         if (at(x, y) != null) continue;
         final tile = factory(Coord(x, y));
         set(x, y, tile);
-        spawns.add(TileSpawn(tile, Coord(x, y), dropDistance));
-        dropDistance++;
+        // Distance is measured from above the board, not from the cell: every
+        // new tile enters over the top edge, so the one landing deepest travels
+        // furthest. Measuring locally made them appear out of thin air part way
+        // down the column.
+        spawns.add(TileSpawn(tile, Coord(x, y), y + filled + 1));
+        filled++;
       }
     }
     return spawns;

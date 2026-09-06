@@ -136,6 +136,8 @@ void measurePlayouts() {
   const runs = 40;
   const cap = 300;
 
+  print('  (preview: one brick per column)');
+
   configs.forEach((label, config) {
     final (operators, minRunLength, bombChance) = config;
     final lengths = <int>[];

@@ -18,15 +18,29 @@ import '../core/board/tile.dart';
 import '../core/board/tile_generator.dart';
 import '../core/levels/level_def.dart';
 import '../core/session/game_session.dart';
+import '../services/ad_service.dart';
+import '../services/leaderboard_service.dart';
 import '../ui/theme/app_theme.dart';
 import 'audio/audio_manager.dart';
 import 'components/board_component.dart';
+import 'components/preview_component.dart';
 
 /// Pixel size of one cell in world space. The camera scales this to the device.
 const double cellSize = 100;
 
 /// Margin around the board, in world pixels.
 const double boardMargin = 24;
+
+/// Vertical space the next-drop strip occupies: the caption plus a full-size
+/// brick row, since a preview brick is the same size as the brick that lands.
+const double previewBandHeight = cellSize + 34;
+
+/// Gap between the preview strip and the board.
+///
+/// Generous on purpose: the preview bricks are the same size as board bricks,
+/// so a tight gap makes the strip read as a ninth row of play rather than as
+/// tiles waiting to enter.
+const double previewGap = 34;
 
 /// Seconds of inactivity before the hint pulses.
 const double hintDelay = 6;
@@ -39,6 +53,19 @@ class SwapperGame extends FlameGame {
   /// GameWidget rather than an overlay, because as an overlay it painted over
   /// the top row of the board.
   static const String gameOverOverlay = 'gameOver';
+
+  /// The rules screen, opened from the HUD.
+  static const String helpOverlay = 'help';
+
+  bool get helpVisible => overlays.isActive(helpOverlay);
+
+  void toggleHelp() {
+    if (helpVisible) {
+      overlays.remove(helpOverlay);
+    } else {
+      overlays.add(helpOverlay);
+    }
+  }
 
   SwapperGame({
     required this.level,
@@ -65,6 +92,7 @@ class SwapperGame extends FlameGame {
   final bool autoPlay;
 
   late final BoardComponent board;
+  late final PreviewComponent preview;
 
   // --- state the overlays listen to ---
   final score = ValueNotifier<int>(0);
@@ -91,25 +119,55 @@ class SwapperGame extends FlameGame {
   Future<void> onLoad() async {
     final boardWidth = level.width * cellSize;
     final boardHeight = level.height * cellSize;
+    final boardTop = boardMargin + previewBandHeight + previewGap;
 
-    board = BoardComponent(session: session, cellSize: cellSize)
-      ..position = Vector2(boardMargin, boardMargin);
-    await world.add(board);
+    // Column-aligned with the board and the same brick size, so a brick in the
+    // strip is visibly the brick that will land in the column beneath it.
+    preview = PreviewComponent(
+      queue: session.queue,
+      cellSize: cellSize,
+      position: Vector2(boardMargin, boardMargin + 34),
+    );
 
+    board = BoardComponent(session: session, cellSize: cellSize);
+
+    // The board is clipped to its own bounds. Refilled tiles start a row above
+    // the top edge and fall in, and that row now sits inside the preview band -
+    // without a clip they visibly fly through the strip on their way down.
+    final clip = ClipComponent.rectangle(
+      position: Vector2(boardMargin, boardTop),
+      size: Vector2(boardWidth, boardHeight),
+    );
+    await clip.add(board);
+
+    await world.addAll([
+      preview,
+      PreviewLabel(
+        cellSize: cellSize,
+        position: Vector2(boardMargin, boardMargin + 15),
+      ),
+      clip,
+    ]);
+
+    final worldHeight = boardTop + boardHeight + boardMargin;
     camera = CameraComponent.withFixedResolution(
       world: world,
       width: boardWidth + boardMargin * 2,
-      height: boardHeight + boardMargin * 2,
+      height: worldHeight,
     )..viewfinder.position = Vector2(
         boardWidth / 2 + boardMargin,
-        boardHeight / 2 + boardMargin,
+        worldHeight / 2,
       );
 
     _publish();
 
-    // Audio loads in the background: the board must not wait on a decode, and
-    // a missing or unplayable clip should cost silence, nothing more.
+    // Audio, ads and leaderboards all load in the background. None of them is
+    // allowed to hold up the first frame, and none of them failing is allowed
+    // to stop the game: a missing clip costs silence, a missing fill costs an
+    // empty banner slot, a declined sign-in costs a leaderboard.
     unawaited(_initAudio());
+    unawaited(AdService.init());
+    unawaited(LeaderboardService.signIn());
   }
 
   Future<void> _initAudio() async {
@@ -125,7 +183,7 @@ class SwapperGame extends FlameGame {
   @override
   void update(double dt) {
     super.update(dt);
-    if (board.busy || session.isOver) {
+    if (board.busy || session.isOver || helpVisible) {
       _idleFor = 0;
       return;
     }
@@ -177,6 +235,7 @@ class SwapperGame extends FlameGame {
   /// A whole turn finished, board settled.
   void onTurnResolved(SwapResult result) {
     _idleFor = 0;
+    unawaited(preview.sync());
     _publish();
   }
 
@@ -195,8 +254,12 @@ class SwapperGame extends FlameGame {
   /// The board deadlocked: the run was wiped and a new board dealt.
   void onBoardReset() {
     _idleFor = 0;
+    unawaited(preview.sync());
     audio.play(Sfx.gameOver, volume: 0.6);
     _say('NO MOVES LEFT');
+    // The run is over even though play continues, so this is where its score
+    // goes to the leaderboard.
+    unawaited(LeaderboardService.submitScore(session.lastRunScore));
     _publish();
   }
 
@@ -213,6 +276,7 @@ class SwapperGame extends FlameGame {
     ];
 
     if (session.isOver) {
+      unawaited(LeaderboardService.submitScore(session.score));
       overlays.add(gameOverOverlay);
     } else {
       overlays.remove(gameOverOverlay);

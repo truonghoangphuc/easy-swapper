@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 import 'core/levels/level_data.dart';
 import 'core/levels/level_def.dart';
 import 'game/swapper_game.dart';
+import 'ui/overlays/ad_banner.dart';
+import 'ui/overlays/help_panel.dart';
 import 'ui/overlays/hud.dart';
 import 'ui/theme/app_theme.dart';
 
@@ -97,9 +99,14 @@ class _GameScreenState extends State<GameScreen> {
                     overlayBuilderMap: {
                       SwapperGame.gameOverOverlay: (_, game) =>
                           GameOverPanel(game: game, onRestart: _restart),
+                      SwapperGame.helpOverlay: (_, game) =>
+                          HelpPanel(onClose: game.toggleHelp),
                     },
                   ),
                 ),
+                // Below the board, so a banner can never cover a brick or
+                // swallow a drag. Takes no height until an ad actually loads.
+                const AdBanner(),
               ],
             ),
           ),

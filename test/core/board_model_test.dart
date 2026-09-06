@@ -170,8 +170,9 @@ void main() {
       expect(board.hasEmptyCells, isFalse);
       expect(spawns, hasLength(2));
       expect(spawns.map((s) => s.to), [const Coord(0, 1), const Coord(0, 0)]);
-      expect(spawns.map((s) => s.dropDistance), [1, 2],
-          reason: 'lower cells land first');
+      // Both travel 2: the pair enters stacked above the board and falls in
+      // formation, so the leading tile goes deeper but no further.
+      expect(spawns.map((s) => s.dropDistance), [2, 2]);
     });
   });
 

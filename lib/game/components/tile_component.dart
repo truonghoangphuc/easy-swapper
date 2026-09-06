@@ -20,6 +20,8 @@ import 'package:flutter/animation.dart';
 import 'package:flutter/material.dart'
     show
         Alignment,
+        Path,
+        StrokeCap,
         Canvas,
         Color,
         FontWeight,
@@ -189,10 +191,16 @@ class TileComponent extends PositionComponent {
 
   _BlockPaints? _paints;
 
-  late final TextComponent _label;
+  TextComponent? _label;
 
   @override
   Future<void> onLoad() async {
+    // A bomb is drawn, not written. It used to carry the bomb emoji, which
+    // depends on the platform having a colour emoji font with that codepoint -
+    // on Windows it came out as a tofu box, and at preview size it was
+    // unreadable. Vector art renders the same everywhere and scales cleanly.
+    if (tile.isBomb) return;
+
     await add(
       _label = TextComponent(
         text: tile.glyph,
@@ -200,8 +208,9 @@ class TileComponent extends PositionComponent {
         position: size / 2,
         textRenderer: TextPaint(
           style: TextStyle(
+              fontFamily: 'Baloo2',
             color: glyphColorOn(_base),
-            fontSize: size.x * (tile.isBomb ? 0.40 : 0.44),
+            fontSize: size.x * 0.50,
             fontWeight: FontWeight.w800,
             height: 1,
             shadows: [
@@ -281,6 +290,8 @@ class TileComponent extends PositionComponent {
     canvas.drawRRect(_outer, paints.rimHighlight);
     canvas.drawRRect(_outer, paints.rimEdge);
 
+    if (tile.isBomb) _drawBomb(canvas);
+
     _drawSelection(canvas);
 
     super.render(canvas);
@@ -305,6 +316,58 @@ class TileComponent extends PositionComponent {
       );
     }
     canvas.restore();
+  }
+
+  /// A bomb: a dark sphere with a highlight, a fuse, and a lit tip.
+  ///
+  /// Proportions are all fractions of the cell, so it reads the same on a board
+  /// brick and on a preview brick.
+  void _drawBomb(Canvas canvas) {
+    final c = size.x;
+    final centre = Offset(c * 0.46, c * 0.56);
+    final radius = c * 0.21;
+
+    canvas.drawCircle(
+      centre,
+      radius,
+      Paint()..color = const Color(0xFF241A18),
+    );
+    // Off-centre highlight, lit from the same top-left as the glass.
+    canvas.drawCircle(
+      Offset(centre.dx - radius * 0.34, centre.dy - radius * 0.38),
+      radius * 0.30,
+      Paint()..color = const Color(0xFFFFFFFF).withValues(alpha: 0.55),
+    );
+
+    final fuse = Path()
+      ..moveTo(centre.dx + radius * 0.55, centre.dy - radius * 0.80)
+      ..quadraticBezierTo(
+        c * 0.70,
+        c * 0.30,
+        c * 0.63,
+        c * 0.22,
+      );
+    canvas.drawPath(
+      fuse,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = c * 0.055
+        ..strokeCap = StrokeCap.round
+        ..color = const Color(0xFF3B2A20),
+    );
+
+    // The spark, pulsing with the same clock as the body throb.
+    final spark = 0.75 + 0.25 * math.sin(_clock * 9);
+    canvas.drawCircle(
+      Offset(c * 0.63, c * 0.22),
+      c * 0.055 * spark,
+      Paint()..color = const Color(0xFFFFE082),
+    );
+    canvas.drawCircle(
+      Offset(c * 0.63, c * 0.22),
+      c * 0.10 * spark,
+      Paint()..color = const Color(0xFFFFB300).withValues(alpha: 0.45),
+    );
   }
 
   void _drawSelection(Canvas canvas) {
@@ -371,7 +434,7 @@ class TileComponent extends PositionComponent {
             _flash = 1;
             // Drop the glyph the instant the block breaks. Keeping it while the
             // block shrinks leaves a dark speck riding the shards down.
-            _label.removeFromParent();
+            _label?.removeFromParent();
           },
         ),
         ScaleEffect.to(

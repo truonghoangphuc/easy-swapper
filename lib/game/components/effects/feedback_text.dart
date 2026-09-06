@@ -15,22 +15,20 @@ import 'package:flutter/animation.dart';
 import 'package:flutter/material.dart'
     show Color, Colors, FontWeight, Offset, Shadow, TextAlign, TextPainter,
         TextSpan, TextStyle;
-import 'package:google_fonts/google_fonts.dart';
 
 import '../../../ui/theme/app_theme.dart';
 
 /// The celebration face, matching easy-mathriss.
 ///
-/// Sour Gummy is a rounded display face; the game's own numerals stay on the
-/// system font, which is narrower and far more legible at tile size. Loading is
-/// asynchronous, so the first line may paint in the fallback and swap - fine for
-/// a caption that only lives for a second and a half.
+/// Sour Gummy is a rounded display face, bundled with the app rather than
+/// fetched, so it is there on the first frame and works offline.
 TextStyle feedbackStyle({
   required double fontSize,
   required FontWeight weight,
   Color? color,
 }) =>
-    GoogleFonts.sourGummy(
+    TextStyle(
+      fontFamily: 'SourGummy',
       fontSize: fontSize,
       fontWeight: weight,
       color: color,

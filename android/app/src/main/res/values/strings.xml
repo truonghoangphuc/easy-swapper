@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Play Games Services project id, from Play Console -> Play Games
+         Services -> Configuration. A placeholder until that project is
+         created; sign-in fails gracefully in the meantime. -->
+    <string name="games_app_id" translatable="false">000000000000</string>
+</resources>

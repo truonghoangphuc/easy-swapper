@@ -13,7 +13,8 @@ dependencies:
   flame: ^1.37.0
   flame_audio: ^2.12.1
   shared_preferences: ^2.5.5
-  google_fonts: ^8.0.2
+  google_mobile_ads: ^9.0.0
+  games_services: ^5.0.0
 
 dev_dependencies:
   flutter_test:
@@ -26,3 +27,17 @@ flutter:
   assets:
     - assets/audio/
     - assets/images/
+
+  # Bundled, not fetched. google_fonts downloads at runtime, which needs the
+  # network on first launch and shows a fallback face until it arrives - and on
+  # a release Android build, where INTERNET is not granted by default, it never
+  # arrives at all. See assets/fonts/README.md for provenance and licensing.
+  fonts:
+    - family: Baloo2
+      fonts:
+        - asset: assets/fonts/Baloo2-ExtraBold.ttf
+          weight: 800
+    - family: SourGummy
+      fonts:
+        - asset: assets/fonts/SourGummy-Bold.ttf
+          weight: 700

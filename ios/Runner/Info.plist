@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>easy_swapper</string>
+	<string>Easy Swapper</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -66,5 +66,19 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- AdMob application id. Google's public demo id: serves test ads and
+	     earns nothing. The Mobile Ads SDK aborts at launch if this key is
+	     absent, so it cannot be left out until release. -->
+	<key>GADApplicationIdentifier</key>
+	<string>ca-app-pub-3940256099942544~1458002511</string>
+	<!-- No encryption beyond what the OS provides. Declaring it here skips the
+	     export-compliance question on every single upload. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!-- Shown when the Mobile Ads SDK asks for tracking permission. Without a
+	     usage description the prompt cannot be presented and App Review
+	     rejects the build. -->
+	<key>NSUserTrackingUsageDescription</key>
+	<string>This identifier is used to show you more relevant ads.</string>
 </dict>
 </plist>
