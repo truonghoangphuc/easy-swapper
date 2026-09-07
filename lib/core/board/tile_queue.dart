@@ -64,4 +64,21 @@ class TileQueue {
       _slots[x] = null;
     }
   }
+
+  Map<String, dynamic> toJson() => {
+        'width': width,
+        'slots': _slots.map((t) => t?.toJson()).toList(),
+      };
+
+  factory TileQueue.fromJson(Map<String, dynamic> json) {
+    final width = json['width'] as int;
+    final queue = TileQueue(width);
+    final slotsData = json['slots'] as List;
+    for (var x = 0; x < width; x++) {
+      if (slotsData[x] != null) {
+        queue._slots[x] = Tile.fromJson(slotsData[x] as Map<String, dynamic>);
+      }
+    }
+    return queue;
+  }
 }

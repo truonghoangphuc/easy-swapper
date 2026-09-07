@@ -10,6 +10,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flame/components.dart';
+import 'package:flame/effects.dart';
 import 'package:flame/game.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show Color;
@@ -20,7 +21,7 @@ import '../core/levels/level_def.dart';
 import '../core/session/game_session.dart';
 import '../services/ad_service.dart';
 import '../services/leaderboard_service.dart';
-import '../ui/theme/app_theme.dart';
+import '../services/save_game_service.dart';
 import 'audio/audio_manager.dart';
 import 'components/board_component.dart';
 import 'components/preview_component.dart';
@@ -72,7 +73,8 @@ class SwapperGame extends FlameGame {
     int? seed,
     this.autoPlay = false,
     double? bombChance,
-  }) : session = GameSession(
+    GameSession? session,
+  }) : session = session ?? GameSession(
           level: level,
           generator: TileGenerator(
             operators: level.operators,
@@ -113,7 +115,7 @@ class SwapperGame extends FlameGame {
   double _idleFor = 0;
 
   @override
-  Color backgroundColor() => AppColors.background;
+  Color backgroundColor() => const Color(0x00000000);
 
   @override
   Future<void> onLoad() async {
@@ -237,6 +239,7 @@ class SwapperGame extends FlameGame {
     _idleFor = 0;
     unawaited(preview.sync());
     _publish();
+    unawaited(SaveGameService.save(session));
   }
 
   void onSwapRejected() {
@@ -249,6 +252,18 @@ class SwapperGame extends FlameGame {
   void onDetonation(ResolveStep step) {
     _idleFor = 0;
     audio.play(Sfx.boom, volume: 0.7);
+    
+    // Intense camera shake for the bomb impact
+    camera.viewfinder.add(
+      MoveEffect.by(
+        Vector2(6, 6),
+        EffectController(
+          duration: 0.04,
+          alternate: true,
+          repeatCount: 8,
+        ),
+      ),
+    );
   }
 
   /// The board deadlocked: the run was wiped and a new board dealt.
@@ -259,7 +274,9 @@ class SwapperGame extends FlameGame {
     _say('NO MOVES LEFT');
     // The run is over even though play continues, so this is where its score
     // goes to the leaderboard.
-    unawaited(LeaderboardService.submitScore(session.lastRunScore));
+    if (level.isEndless) {
+      unawaited(LeaderboardService.submitScore(session.lastRunScore));
+    }
     _publish();
   }
 
@@ -276,7 +293,9 @@ class SwapperGame extends FlameGame {
     ];
 
     if (session.isOver) {
-      unawaited(LeaderboardService.submitScore(session.score));
+      if (level.isEndless) {
+        unawaited(LeaderboardService.submitScore(session.score));
+      }
       overlays.add(gameOverOverlay);
     } else {
       overlays.remove(gameOverOverlay);

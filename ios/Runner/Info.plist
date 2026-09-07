@@ -66,11 +66,10 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<!-- AdMob application id. Google's public demo id: serves test ads and
-	     earns nothing. The Mobile Ads SDK aborts at launch if this key is
-	     absent, so it cannot be left out until release. -->
+	<!-- AdMob application id. The Mobile Ads SDK aborts at launch if this
+	     key is absent or malformed. -->
 	<key>GADApplicationIdentifier</key>
-	<string>ca-app-pub-3940256099942544~1458002511</string>
+	<string>ca-app-pub-5104291908556139~1994329205</string>
 	<!-- No encryption beyond what the OS provides. Declaring it here skips the
 	     export-compliance question on every single upload. -->
 	<key>ITSAppUsesNonExemptEncryption</key>

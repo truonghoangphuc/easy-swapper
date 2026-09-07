@@ -658,4 +658,61 @@ class GameSession {
 
   /// The highest-scoring swap available, for the idle hint.
   Move? hint() => findBestMove(board, minRunLength: level.minRunLength);
+
+  Map<String, dynamic> toJson() => {
+        'levelId': level.id,
+        'phase': phase.name,
+        'score': score,
+        'movesUsed': movesUsed,
+        'equationsCleared': equationsCleared,
+        'longestChain': longestChain,
+        'bombsDetonated': bombsDetonated,
+        'lastRunScore': lastRunScore,
+        'operatorUses': operatorUses,
+        'runsByLength':
+            runsByLength.map((k, v) => MapEntry(k.toString(), v)),
+        'queue': queue.toJson(),
+        'board': board.toJson(),
+      };
+
+  factory GameSession.fromJson(
+    Map<String, dynamic> json,
+    TileGenerator generator,
+    LevelDef level,
+  ) {
+    final board = BoardModel.fromJson(json['board'] as Map<String, dynamic>);
+    final session = GameSession(
+      level: level,
+      generator: generator,
+      board: board,
+    );
+
+    // Override the queue that was primed in the constructor.
+    final savedQueue = TileQueue.fromJson(json['queue'] as Map<String, dynamic>);
+    for (var x = 0; x < savedQueue.width; x++) {
+      final tile = savedQueue.peek(x);
+      if (tile != null) session.queue.fill(x, tile);
+    }
+
+    session.phase = SessionPhase.values.byName(json['phase'] as String);
+    session.score = json['score'] as int;
+    session.movesUsed = json['movesUsed'] as int;
+    session.equationsCleared = json['equationsCleared'] as int;
+    session.longestChain = json['longestChain'] as int;
+    session.bombsDetonated = json['bombsDetonated'] as int;
+    session.lastRunScore = json['lastRunScore'] as int;
+
+    if (json['operatorUses'] != null) {
+      session.operatorUses
+          .addAll(Map<String, int>.from(json['operatorUses'] as Map));
+    }
+    if (json['runsByLength'] != null) {
+      final runs = json['runsByLength'] as Map;
+      for (final entry in runs.entries) {
+        session.runsByLength[int.parse(entry.key.toString())] =
+            entry.value as int;
+      }
+    }
+    return session;
+  }
 }

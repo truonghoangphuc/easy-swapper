@@ -90,13 +90,35 @@ ParticleSystemComponent shockwaveAt(
       lifespan: lifespan,
       renderer: (canvas, particle) {
         final t = Curves.easeOutQuad.transform(particle.progress);
+        final fade = 1 - t;
+        
+        // Outer high-pressure ring
         canvas.drawCircle(
           Offset.zero,
           radius * (0.15 + t * 0.85),
           Paint()
             ..style = PaintingStyle.stroke
-            ..strokeWidth = radius * 0.14 * (1 - t)
-            ..color = color.withValues(alpha: (1 - t) * 0.8),
+            ..strokeWidth = radius * 0.14 * fade
+            ..color = color.withValues(alpha: fade * 0.9),
+        );
+        
+        // Inner trailing ring
+        canvas.drawCircle(
+          Offset.zero,
+          radius * (0.05 + t * 0.65),
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = radius * 0.25 * fade
+            ..color = color.withValues(alpha: fade * 0.5),
+        );
+        
+        // Core concussive flash
+        canvas.drawCircle(
+          Offset.zero,
+          radius * (0.1 + t * 0.95),
+          Paint()
+            ..style = PaintingStyle.fill
+            ..color = color.withValues(alpha: fade * 0.25),
         );
       },
     ),

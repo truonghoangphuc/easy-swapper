@@ -38,13 +38,11 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
-        <!-- AdMob application id. This is Google's public demo id: the app will
-             serve test ads and earn nothing. Replace with the real one from the
-             AdMob console before release - the SDK crashes on startup if the
-             value is missing or malformed, so it cannot simply be left blank. -->
+        <!-- AdMob application id. Replace with the real one from the AdMob
+             console — the SDK crashes on startup if this is missing or wrong. -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
-            android:value="ca-app-pub-3940256099942544~3347511713"/>
+            android:value="ca-app-pub-5104291908556139~8410729598"/>
 
         <!-- Play Games Services application id, from Play Console. Until a real
              project exists this is a placeholder and sign-in will fail

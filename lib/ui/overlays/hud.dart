@@ -6,9 +6,12 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../../core/levels/level_data.dart';
 import '../../core/session/game_session.dart';
 import '../../game/swapper_game.dart';
 import '../../services/leaderboard_service.dart';
+import '../../services/save_game_service.dart';
+import '../../main.dart';
 import '../theme/app_theme.dart';
 
 class Hud extends StatelessWidget {
@@ -86,7 +89,8 @@ class _Chip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      height: 56,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: BoxDecoration(
         color: AppColors.boardBackground,
         borderRadius: BorderRadius.circular(12),
@@ -97,10 +101,11 @@ class _Chip extends StatelessWidget {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Text(
             label,
+            maxLines: 1,
             style: const TextStyle(
               color: AppColors.textDim,
               fontSize: 10,
@@ -108,12 +113,18 @@ class _Chip extends StatelessWidget {
               fontWeight: FontWeight.w700,
             ),
           ),
-          Text(
-            value,
-            style: TextStyle(
-              color: highlight ? AppColors.danger : AppColors.text,
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              maxLines: 1,
+              style: TextStyle(
+                color: highlight ? AppColors.danger : AppColors.text,
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                height: 1.1,
+              ),
             ),
           ),
         ],
@@ -156,17 +167,20 @@ class _IconChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return IconButton(
-      onPressed: onPressed,
-      tooltip: tooltip,
-      icon: Icon(icon, color: active ? AppColors.accent : AppColors.textDim),
-      style: IconButton.styleFrom(
-        backgroundColor: AppColors.boardBackground,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: const BorderSide(color: AppColors.gridLine, width: 1.5),
+    return SizedBox(
+      height: 56,
+      width: 56,
+      child: IconButton(
+        onPressed: onPressed,
+        tooltip: tooltip,
+        icon: Icon(icon, color: active ? AppColors.accent : AppColors.textDim),
+        style: IconButton.styleFrom(
+          backgroundColor: AppColors.boardBackground,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: const BorderSide(color: AppColors.gridLine, width: 1.5),
+          ),
         ),
-        padding: const EdgeInsets.all(14),
       ),
     );
   }
@@ -277,13 +291,53 @@ class GameOverPanel extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 20),
-            FilledButton(
-              onPressed: onRestart,
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.accent,
-                foregroundColor: AppColors.background,
-              ),
-              child: const Text('PLAY AGAIN'),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                OutlinedButton(
+                  onPressed: () {
+                    // Back to Menu
+                    SaveGameService.clear();
+                    Navigator.of(context).pop();
+                  },
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.text,
+                    side: const BorderSide(color: AppColors.gridLine, width: 2),
+                  ),
+                  child: const Text('MENU'),
+                ),
+                const SizedBox(width: 12),
+                FilledButton(
+                  onPressed: onRestart,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.boardBackground,
+                    foregroundColor: AppColors.text,
+                    side: const BorderSide(color: AppColors.gridLine, width: 2),
+                  ),
+                  child: const Text('RETRY'),
+                ),
+                if (won && !game.level.isEndless) ...[
+                  const SizedBox(width: 12),
+                  FilledButton(
+                    onPressed: () {
+                      SaveGameService.clear();
+                      final next = levelById(game.level.id + 1);
+                      if (next != null) {
+                        Navigator.of(context).pushReplacement(
+                          MaterialPageRoute(builder: (_) => GameScreen(level: next)),
+                        );
+                      } else {
+                        Navigator.of(context).pop();
+                      }
+                    },
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.accent,
+                      foregroundColor: AppColors.background,
+                    ),
+                    child: const Text('NEXT'),
+                  ),
+                ],
+              ],
             ),
           ],
         ),

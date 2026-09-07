@@ -29,14 +29,24 @@ abstract final class DemoAdUnits {
   static const iosRewarded = 'ca-app-pub-3940256099942544/1712485313';
 }
 
-/// Real units, supplied at build time. Empty means "fall back to the demo unit",
-/// which is what keeps a half-configured release from crashing.
+/// Real production units. The Android IDs are baked in as defaults so a
+/// release build serves live ads without needing --dart-define flags.
+/// The iOS banner unit must still be supplied via:
+///     flutter build ipa --dart-define=admob_banner_ios=ca-app-pub-…
 abstract final class _LiveAdUnits {
-  static const androidBanner =
-      String.fromEnvironment('admob_banner_android');
-  static const iosBanner = String.fromEnvironment('admob_banner_ios');
-  static const androidRewarded =
-      String.fromEnvironment('admob_rewarded_android');
+  /// Real Android banner unit ID (AdMob console → Apps → Easy Swapper → Ad units)
+  static const androidBanner = String.fromEnvironment(
+    'admob_banner_android',
+    defaultValue: 'ca-app-pub-5104291908556139/5648834887',
+  );
+
+  /// iOS banner unit ID (AdMob console → Apps → Easy Swapper → Ad units)
+  static const iosBanner = String.fromEnvironment(
+    'admob_banner_ios',
+    defaultValue: 'ca-app-pub-5104291908556139/5172719985',
+  );
+
+  static const androidRewarded = String.fromEnvironment('admob_rewarded_android');
   static const iosRewarded = String.fromEnvironment('admob_rewarded_ios');
 }
 

@@ -364,4 +364,35 @@ class BoardModel {
         for (var y = 0; y < height; y++)
           [for (var x = 0; x < width; x++) at(x, y)?.glyph ?? '.'].join(' '),
       ].join('\n');
+
+  Map<String, dynamic> toJson() => {
+        'width': width,
+        'height': height,
+        'ids': ids.toJson(),
+        'grid': _grid
+            .map((row) => row.map((tile) => tile?.toJson()).toList())
+            .toList(),
+      };
+
+  factory BoardModel.fromJson(Map<String, dynamic> json) {
+    final width = json['width'] as int;
+    final height = json['height'] as int;
+    final ids = TileIdGenerator.fromJson(json['ids'] as Map<String, dynamic>);
+    final board = BoardModel(width: width, height: height, ids: ids);
+
+    final gridData = json['grid'] as List;
+    for (var y = 0; y < height; y++) {
+      final rowData = gridData[y] as List;
+      for (var x = 0; x < width; x++) {
+        if (rowData[x] != null) {
+          board.set(
+            x,
+            y,
+            Tile.fromJson(rowData[x] as Map<String, dynamic>),
+          );
+        }
+      }
+    }
+    return board;
+  }
 }

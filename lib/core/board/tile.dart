@@ -102,6 +102,22 @@ class Tile {
         special: special ?? this.special,
       );
 
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'glyph': glyph,
+        'kind': kind.name,
+        if (special != null) 'special': special!.name,
+      };
+
+  factory Tile.fromJson(Map<String, dynamic> json) => Tile(
+        id: json['id'] as int,
+        glyph: json['glyph'] as String,
+        kind: TileKind.values.byName(json['kind'] as String),
+        special: json['special'] != null
+            ? SpecialKind.values.byName(json['special'] as String)
+            : null,
+      );
+
   @override
   String toString() => 'Tile($glyph#$id)';
 }
@@ -117,6 +133,8 @@ bool isOperator(Tile? tile) =>
 ///
 /// Owned by the board so that a seeded test run is fully reproducible.
 class TileIdGenerator {
+  TileIdGenerator();
+  
   int _next = 0;
 
   int nextId() => _next++;
@@ -125,4 +143,12 @@ class TileIdGenerator {
   void restore(int value) => _next = value;
 
   int get current => _next;
+
+  Map<String, dynamic> toJson() => {'next': _next};
+
+  factory TileIdGenerator.fromJson(Map<String, dynamic> json) {
+    final gen = TileIdGenerator();
+    gen.restore(json['next'] as int);
+    return gen;
+  }
 }

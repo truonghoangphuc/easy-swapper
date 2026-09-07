@@ -24,16 +24,16 @@ abstract final class LeaderboardIds {
   /// From Play Console → Play Games Services → Leaderboards.
   static const android = String.fromEnvironment(
     'leaderboard_android',
-    defaultValue: 'REPLACE_WITH_PLAY_LEADERBOARD_ID',
+    defaultValue: 'easy_swapper_endless_android',
   );
 
   /// From App Store Connect → Game Center → Leaderboards.
   static const ios = String.fromEnvironment(
     'leaderboard_ios',
-    defaultValue: 'easy_swapper_high_score',
+    defaultValue: 'easy_swapper_endless_ios',
   );
 
-  static bool get configured => !android.startsWith('REPLACE_WITH');
+  static bool get configured => true;
 }
 
 class LeaderboardService {
