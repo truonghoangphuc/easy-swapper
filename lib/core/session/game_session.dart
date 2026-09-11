@@ -37,8 +37,14 @@ enum SwapRejection {
   /// The swap completes no equation.
   noMatch,
 
-  /// The session is mid-resolution or already over.
+  /// The board is animating or the run is over.
   wrongPhase,
+
+  /// In the tutorial, only the correct hinted move is allowed.
+  tutorialLock,
+
+  /// One of the tiles is frozen or stone and cannot be swapped.
+  lockedTile,
 }
 
 /// One link in a cascade chain: what matched, what cleared, what moved.
@@ -47,6 +53,7 @@ class ResolveStep {
     required this.cascadeIndex,
     required this.matches,
     required this.cleared,
+    this.thawed = const {},
     required this.falls,
     required this.spawns,
     required this.baseScore,
@@ -58,8 +65,16 @@ class ResolveStep {
   /// 0 for the swap itself, 1 for the first cascade, and so on.
   final int cascadeIndex;
 
+  /// Equations that resolved in this step.
   final List<BoardMatch> matches;
+
+  /// Cells that were removed from the board.
   final Set<Coord> cleared;
+  
+  /// Cells that were frozen and thawed out (remaining on the board).
+  final Set<Coord> thawed;
+
+  /// The post-clear compaction.
   final List<TileFall> falls;
   final List<TileSpawn> spawns;
 
@@ -222,9 +237,12 @@ class GameSession {
             .clamp(0.0, 1.0),
       };
 
-  /// Attempts the player's swap.
+  /// True if this is the very first move of Level 1.
+  bool get isTutorialActive => level.id == 1 && score == 0;
+
+  /// Attempts a swap and returns the resolution trace.
   ///
-  /// On success the board is left fully settled - cascaded, refilled, and
+  /// If the swap is valid it is applied, the cascades are resolved - and the board
   /// reshuffled if it deadlocked - and the returned steps describe how it got
   /// there. On rejection the board is untouched and no move is consumed.
   SwapResult trySwap(Coord a, Coord b) {
@@ -233,6 +251,25 @@ class GameSession {
     }
     if (!a.isAdjacentTo(b)) {
       return const SwapResult.rejected(SwapRejection.notAdjacent);
+    }
+    
+    final tileA = board.atCoord(a);
+    final tileB = board.atCoord(b);
+    if ((tileA != null && (tileA.isFrozen || tileA.isStone)) ||
+        (tileB != null && (tileB.isFrozen || tileB.isStone))) {
+      // Treat as wrongPhase or a new rejection type? Let's just use notAdjacent or wrongPhase.
+      // Wait, let's use noMatch so it nudges and rejects, or add a new rejection reason.
+      // We can just add `lockedTile` to SwapRejection.
+      return const SwapResult.rejected(SwapRejection.lockedTile);
+    }
+
+    if (isTutorialActive) {
+      final best = hint();
+      if (best != null) {
+        if (!((a == best.a && b == best.b) || (a == best.b && b == best.a))) {
+          return const SwapResult.rejected(SwapRejection.tutorialLock);
+        }
+      }
     }
 
     board.swap(a, b);
@@ -284,7 +321,18 @@ class GameSession {
   }
 
   ResolveStep _resolve(List<BoardMatch> matches, int cascadeIndex) {
-    final cleared = board.cellsToClear(matches);
+    final toClear = board.cellsToClear(matches);
+    final cleared = <Coord>{};
+    final thawed = <Coord>{};
+
+    for (final c in toClear) {
+      final tile = board.atCoord(c);
+      if (tile != null && tile.isFrozen) {
+        thawed.add(c);
+      } else {
+        cleared.add(c);
+      }
+    }
 
     var baseScore = 0;
     var feedback = '';
@@ -309,6 +357,7 @@ class GameSession {
     score += baseScore * multiplier;
 
     board.clear(cleared);
+    board.thaw(thawed);
     final falls = board.compact();
     final spawns = _refill();
 
@@ -316,6 +365,7 @@ class GameSession {
       cascadeIndex: cascadeIndex,
       matches: matches,
       cleared: cleared,
+      thawed: thawed,
       falls: falls,
       spawns: spawns,
       baseScore: baseScore,
@@ -639,6 +689,26 @@ class GameSession {
       }
     }
 
+    queue.clear();
+    replenishQueue();
+  }
+
+  /// Reshuffles the board with a fresh layout while **keeping** the current
+  /// score. Called as the reward for watching a rewarded ad on deadlock.
+  ///
+  /// Structurally identical to [resetAfterDeadlock] but does not touch score,
+  /// chain stats, or [lastRunScore].
+  void shuffleBoard() {
+    final fresh = generator.generateBoard(
+      width: board.width,
+      height: board.height,
+      minRunLength: level.minRunLength,
+    );
+    for (var y = 0; y < board.height; y++) {
+      for (var x = 0; x < board.width; x++) {
+        board.set(x, y, fresh.at(x, y));
+      }
+    }
     queue.clear();
     replenishQueue();
   }

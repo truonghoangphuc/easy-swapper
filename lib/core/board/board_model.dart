@@ -290,6 +290,16 @@ class BoardModel {
     }
   }
 
+  /// Thaws [cells] by removing the frozen state, leaving the tile on the board.
+  void thaw(Iterable<Coord> cells) {
+    for (final c in cells) {
+      final tile = atCoord(c);
+      if (tile != null && tile.isFrozen) {
+        setCoord(c, tile.copyWith(isFrozen: false));
+      }
+    }
+  }
+
   /// Slides every tile down into the holes beneath it.
   ///
   /// Returns the movements so the render layer can animate them. Ported from

@@ -69,12 +69,22 @@ class Tile {
     required this.glyph,
     required this.kind,
     this.special,
+    this.isFrozen = false,
+    this.isStone = false,
   });
 
   final int id;
   final String glyph;
   final TileKind kind;
   final SpecialKind? special;
+  
+  /// A frozen tile can be tokenized and matched, but doing so only thaws it
+  /// instead of clearing it. Frozen tiles cannot be swapped.
+  final bool isFrozen;
+
+  /// A stone tile is a dead cell. It cannot be swapped and does not tokenize.
+  /// It can only be destroyed by an adjacent bomb blast.
+  final bool isStone;
 
   bool get isSpecial => special != null;
 
@@ -88,18 +98,46 @@ class Tile {
         special: SpecialKind.bomb,
       );
 
+  /// A stone tile carrying [id].
+  factory Tile.stone(int id) => Tile(
+        id: id,
+        glyph: '🪨', // Rock emoji
+        kind: TileKind.special,
+        isStone: true,
+      );
+      
+  /// A wildcard tile carrying [id] that can act as any digit.
+  factory Tile.wildcard(int id) => Tile(
+        id: id,
+        glyph: '?',
+        kind: TileKind.special,
+        special: SpecialKind.wildcard,
+      );
+
   /// The glyph as the expression engine should see it.
   ///
-  /// Specials return `null` so a run containing one fails to tokenize, which is
-  /// exactly the abort behaviour the scanner expects.
-  String? get scanGlyph => isSpecial ? null : glyph;
+  /// Specials and stones return `null` so a run containing one fails to tokenize,
+  /// which is exactly the abort behaviour the scanner expects.
+  String? get scanGlyph {
+    if (special == SpecialKind.wildcard) return glyph; // '?'
+    return (isSpecial || isStone) ? null : glyph;
+  }
 
-  Tile copyWith({int? id, String? glyph, TileKind? kind, SpecialKind? special}) =>
+  Tile copyWith({
+    int? id,
+    String? glyph,
+    TileKind? kind,
+    SpecialKind? special,
+    bool? isFrozen,
+    bool? isStone,
+  }) =>
       Tile(
         id: id ?? this.id,
         glyph: glyph ?? this.glyph,
         kind: kind ?? this.kind,
         special: special ?? this.special,
+        isFrozen: isFrozen ?? this.isFrozen,
+        isStone: isStone ?? this.isStone,
       );
 
   Map<String, dynamic> toJson() => {
@@ -107,6 +145,8 @@ class Tile {
         'glyph': glyph,
         'kind': kind.name,
         if (special != null) 'special': special!.name,
+        if (isFrozen) 'isFrozen': true,
+        if (isStone) 'isStone': true,
       };
 
   factory Tile.fromJson(Map<String, dynamic> json) => Tile(
@@ -116,10 +156,12 @@ class Tile {
         special: json['special'] != null
             ? SpecialKind.values.byName(json['special'] as String)
             : null,
+        isFrozen: json['isFrozen'] as bool? ?? false,
+        isStone: json['isStone'] as bool? ?? false,
       );
 
   @override
-  String toString() => 'Tile($glyph#$id)';
+  String toString() => 'Tile($glyph#$id${isFrozen ? " frozen" : ""}${isStone ? " stone" : ""})';
 }
 
 /// True if [tile] carries an arithmetic or comparison glyph.

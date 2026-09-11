@@ -15,6 +15,7 @@ dependencies:
   shared_preferences: ^2.5.5
   google_mobile_ads: ^9.0.0
   games_services: ^5.0.0
+  in_app_review: ^2.0.12
 
 dev_dependencies:
   flutter_test:
@@ -38,6 +39,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/audio/
+    - assets/audio/background/
     - assets/images/
 
   # Bundled, not fetched. google_fonts downloads at runtime, which needs the

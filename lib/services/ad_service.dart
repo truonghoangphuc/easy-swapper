@@ -46,8 +46,14 @@ abstract final class _LiveAdUnits {
     defaultValue: 'ca-app-pub-5104291908556139/5172719985',
   );
 
-  static const androidRewarded = String.fromEnvironment('admob_rewarded_android');
-  static const iosRewarded = String.fromEnvironment('admob_rewarded_ios');
+  static const androidRewarded = String.fromEnvironment(
+    'admob_rewarded_android',
+    defaultValue: 'ca-app-pub-5104291908556139/8343778420',
+  );
+  static const iosRewarded = String.fromEnvironment(
+    'admob_rewarded_ios',
+    defaultValue: 'ca-app-pub-5104291908556139/4636623233',
+  );
 }
 
 class AdService {

@@ -12,8 +12,10 @@ import 'package:flame/components.dart';
 import 'package:flame/effects.dart';
 import 'package:flame/events.dart';
 import 'package:flutter/animation.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart' show Canvas, Paint, RRect, Radius, Rect;
 
+import '../../core/board/board_model.dart';
 import '../../core/board/tile.dart';
 import '../../core/session/game_session.dart';
 import '../../ui/theme/app_theme.dart';
@@ -21,6 +23,7 @@ import '../swapper_game.dart';
 import 'effects/boom.dart';
 import 'effects/feedback_text.dart';
 import 'tile_component.dart';
+import 'tutorial_hand_component.dart';
 
 /// Fraction of a cell the finger must travel before a drag commits to a swap.
 const double _dragThreshold = 0.35;
@@ -88,9 +91,11 @@ class BoardComponent extends PositionComponent
   // --- construction -------------------------------------------------------
 
   Future<void> _buildFromModel() async {
-    for (final component in _components.values) {
-      component.removeFromParent();
-    }
+    // Remove ALL TileComponents from the Flame tree — including any ghost
+    // components that are mid-pop-animation and have already been removed
+    // from `_components` but are still rendering. Using removeWhere covers
+    // both tracked and untracked (orphaned) tiles in one sweep.
+    removeWhere((c) => c is TileComponent);
     _components.clear();
 
     // One batched add, not sixty-four awaited ones. Each `add` future settles on
@@ -111,17 +116,6 @@ class BoardComponent extends PositionComponent
       }
     }
     await addAll(fresh);
-  }
-
-  Future<TileComponent> _spawn(Tile tile, Coord at, {Vector2? from}) async {
-    final component = TileComponent(
-      tile: tile,
-      position: from ?? centerOf(at),
-      cellSize: cellSize,
-    );
-    _components[tile.id] = component;
-    await add(component);
-    return component;
   }
 
   TileComponent? _componentAt(Coord c) {
@@ -242,8 +236,10 @@ class BoardComponent extends PositionComponent
       final result = session.trySwap(a, b);
 
       if (!result.accepted) {
-        if (result.rejection == SwapRejection.noMatch) {
-          await _animateRejectedSwap(a, b);
+        if (result.rejection == SwapRejection.noMatch || 
+            result.rejection == SwapRejection.tutorialLock ||
+            result.rejection == SwapRejection.lockedTile) {
+          await _animateRejectedSwap(a, b, result.rejection!);
         }
         return;
       }
@@ -260,15 +256,20 @@ class BoardComponent extends PositionComponent
 
       if (result.boardReset) await _playBoardReset();
       game.onTurnResolved(result);
+
+      // Repair any view/component drift that may have accumulated during the
+      // cascade animations. In practice this is a no-op on every healthy turn;
+      // it only triggers a rebuild when timing pressure caused a missed update.
+      await _reconcileView();
     } finally {
       busy = false;
     }
   }
 
-  Future<void> _animateRejectedSwap(Coord a, Coord b) async {
-    _componentAt(a)?.nudgeTo(centerOf(b));
-    _componentAt(b)?.nudgeTo(centerOf(a));
-    game.onSwapRejected();
+  Future<void> _animateRejectedSwap(Coord a, Coord b, SwapRejection reason) async {
+    _componentAt(a)?.nudgeTo(centerOf(b), returnTo: centerOf(a));
+    _componentAt(b)?.nudgeTo(centerOf(a), returnTo: centerOf(b));
+    game.onSwapRejected(reason);
     await _sleep(swapDuration * 2);
   }
 
@@ -302,6 +303,16 @@ class BoardComponent extends PositionComponent
         _shatterAfter(delay, cell, component.tile, inBlast: step.isBlast),
       );
     }
+    
+    for (final cell in step.thawed) {
+      final component = _componentAt(cell);
+      if (component != null) {
+        final newTile = session.board.atCoord(cell);
+        if (newTile != null) {
+           component.thaw(newTile); 
+        }
+      }
+    }
 
     _showFeedback(step);
     game.onStepResolved(step);
@@ -317,18 +328,42 @@ class BoardComponent extends PositionComponent
       );
     }
 
+    final freshSpawns = <TileComponent>[];
+    final spawnTargets = <TileComponent, TileSpawn>{};
+
     for (final spawn in step.spawns) {
       _view[spawn.to.y][spawn.to.x] = spawn.tile.id;
-      final component = await _spawn(
-        spawn.tile,
-        spawn.to,
-        from: centerOf(spawn.to) - Vector2(0, spawn.dropDistance * cellSize),
+      final component = TileComponent(
+        tile: spawn.tile,
+        position: centerOf(spawn.to) - Vector2(0, spawn.dropDistance * cellSize),
+        cellSize: cellSize,
       );
-      component.fallTo(centerOf(spawn.to), distance: spawn.dropDistance);
+      _components[spawn.tile.id] = component;
+      freshSpawns.add(component);
+      spawnTargets[component] = spawn;
+    }
+
+    if (freshSpawns.isNotEmpty) {
+      await addAll(freshSpawns);
+      for (final component in freshSpawns) {
+        final spawn = spawnTargets[component]!;
+        component.fallTo(centerOf(spawn.to), distance: spawn.dropDistance);
+      }
+    }
+
+    var maxDistance = 0;
+    for (final fall in step.falls) {
+      final d = fall.to.y - fall.from.y;
+      if (d > maxDistance) maxDistance = d;
+    }
+    for (final spawn in step.spawns) {
+      if (spawn.dropDistance > maxDistance) maxDistance = spawn.dropDistance;
     }
 
     if (step.spawns.isNotEmpty) game.onRefillDropped();
-    await _sleep(0.20);
+    
+    final fallDuration = maxDistance > 0 ? 0.11 + 0.035 * maxDistance : 0.0;
+    await _sleep(fallDuration > 0.20 ? fallDuration : 0.20);
   }
 
   /// Breaks one cell into pieces, timed to land on the peak of its pop.
@@ -426,39 +461,100 @@ class BoardComponent extends PositionComponent
   /// The pause is deliberately long. The run's score has just been wiped, and
   /// the player needs to read why before a new board appears under them.
   Future<void> _playBoardReset() async {
-    game.onBoardReset();
-    add(
-      FeedbackTextComponent(
-        message: 'NO MOVES LEFT',
-        tone: FeedbackTone.boom,
-        position: Vector2(size.x / 2, size.y * 0.38),
-        baseFontSize: cellSize * 0.30,
-      ),
-    );
-    await _sleep(0.55);
+    // In endless mode, pause here and let the Flutter layer show a
+    // "Watch an ad to shuffle?" dialog. The game loop awaits the choice.
+    final shouldShuffle = await game.waitForDeadlockChoice();
 
-    for (final component in _components.values) {
-      component.add(
-        ScaleEffect.to(
-          Vector2.zero(),
-          EffectController(duration: 0.28, curve: Curves.easeInBack),
+    if (shouldShuffle) {
+      // Player watched the ad: reshuffle without wiping score.
+      session.shuffleBoard();
+      add(
+        FeedbackTextComponent(
+          message: 'BOARD SHUFFLED!',
+          tone: FeedbackTone.normal,
+          position: Vector2(size.x / 2, size.y * 0.38),
+          baseFontSize: cellSize * 0.28,
+        ),
+      );
+      await _sleep(0.35);
+      for (final component in _components.values) {
+        component.add(
+          ScaleEffect.to(
+            Vector2.zero(),
+            EffectController(duration: 0.22, curve: Curves.easeInBack),
+          ),
+        );
+      }
+      await _sleep(0.28);
+      await _buildFromModel();
+    } else {
+      // Player declined (or non-endless): normal wipe.
+      game.onBoardReset();
+      add(
+        FeedbackTextComponent(
+          message: 'NO MOVES LEFT',
+          tone: FeedbackTone.boom,
+          position: Vector2(size.x / 2, size.y * 0.38),
+          baseFontSize: cellSize * 0.30,
+        ),
+      );
+      await _sleep(0.55);
+
+      for (final component in _components.values) {
+        component.add(
+          ScaleEffect.to(
+            Vector2.zero(),
+            EffectController(duration: 0.28, curve: Curves.easeInBack),
+          ),
+        );
+      }
+      await _sleep(0.34);
+      await _buildFromModel();
+
+      add(
+        FeedbackTextComponent(
+          message: 'SCORE RESET',
+          tone: FeedbackTone.normal,
+          position: Vector2(size.x / 2, size.y * 0.38),
+          baseFontSize: cellSize * 0.26,
         ),
       );
     }
-    await _sleep(0.34);
-    await _buildFromModel();
+  }
 
+  /// Drops a saved bomb onto a random non-bomb cell and rebuilding the view.
+  Future<void> dropBomb() async {
+    final nonBombs = <Coord>[];
+    for (var y = 0; y < session.board.height; y++) {
+      for (var x = 0; x < session.board.width; x++) {
+        final coord = Coord(x, y);
+        final tile = session.board.atCoord(coord);
+        if (tile != null && !tile.isBomb) {
+          nonBombs.add(coord);
+        }
+      }
+    }
+    if (nonBombs.isEmpty) return;
+
+    final target = nonBombs[session.generator.rng.nextInt(nonBombs.length)];
+    session.board.setCoord(target, Tile.bomb(session.generator.ids.nextId()));
+    
+    // Quick flare effect before rebuilding
     add(
       FeedbackTextComponent(
-        message: 'SCORE RESET',
-        tone: FeedbackTone.normal,
-        position: Vector2(size.x / 2, size.y * 0.38),
-        baseFontSize: cellSize * 0.26,
+        message: 'BOMB DEPLOYED!',
+        tone: FeedbackTone.boom,
+        position: centerOf(target),
+        baseFontSize: cellSize * 0.4,
       ),
     );
+    await _sleep(0.3);
+    await _buildFromModel();
   }
 
   // --- hint ---------------------------------------------------------------
+
+  TutorialHandComponent? _tutorialHand;
 
   /// Pulses the tiles of the best available swap.
   void showHint() {
@@ -469,6 +565,11 @@ class BoardComponent extends PositionComponent
     for (final cell in _hintCells) {
       _componentAt(cell)?.hinting = true;
     }
+
+    if (session.isTutorialActive && _tutorialHand == null) {
+      _tutorialHand = TutorialHandComponent(a: move.a, b: move.b);
+      add(_tutorialHand!);
+    }
   }
 
   void _clearHint() {
@@ -476,12 +577,88 @@ class BoardComponent extends PositionComponent
       _componentAt(cell)?.hinting = false;
     }
     _hintCells = const [];
+
+    if (_tutorialHand != null) {
+      _tutorialHand?.removeFromParent();
+      _tutorialHand = null;
+    }
   }
 
-  Future<void> _sleep(double seconds) =>
-      Future<void>.delayed(Duration(microseconds: (seconds * 1e6).round()));
+  Future<void> _sleep(double seconds) {
+    if (seconds <= 0) return Future.value();
+    final completer = Completer<void>();
+    add(
+      TimerComponent(
+        period: seconds,
+        onTick: completer.complete,
+        removeOnFinish: true,
+      ),
+    );
+    return completer.future;
+  }
 
   // --- test support -------------------------------------------------------
+
+  /// Repairs any cell where the on-screen mirror has drifted from the model.
+  ///
+  /// After a long cascade chain, animation timing can cause the `_view` or
+  /// `_components` map to disagree with `session.board`. This scan detects and
+  /// fixes silent drift so orphaned/missing cells can never accumulate over a
+  /// long session.
+  ///
+  /// Called after every resolved turn (when the board is idle). It is cheap:
+  /// 64 comparisons against an in-memory map.
+  Future<void> _reconcileView() async {
+    bool needsRebuild = false;
+
+    for (var y = 0; y < _height; y++) {
+      for (var x = 0; x < _width; x++) {
+        final expected = session.board.at(x, y)?.id;
+        final actual = _view[y][x];
+
+        if (expected == actual) {
+          // IDs match — verify the component is actually alive.
+          if (expected != null) {
+            final component = _components[expected];
+            if (component == null || !component.isMounted) {
+              // Component missing or orphaned — mark for full rebuild.
+              needsRebuild = true;
+              break;
+            } else {
+              // Cancel any active movement effects then snap to the exact grid
+              // center. Without cancelling, a live MoveToEffect will fight the
+              // position write and move the tile back off-grid on the next tick.
+              component.removeWhere((c) => c is MoveToEffect || c is MoveEffect);
+              component.position = centerOf(Coord(x, y));
+            }
+          }
+        } else {
+          // ID mismatch — drift detected.
+          needsRebuild = true;
+          break;
+        }
+      }
+      if (needsRebuild) break;
+    }
+
+    // Check for ghost tiles: components still rendering but not in the tracked
+    // map (e.g., mid-pop when their entry was already removed from _components).
+    // Count any TileComponent children that aren't in the tracked map.
+    if (!needsRebuild) {
+      final trackedIds = _components.keys.toSet();
+      final hasGhosts = children
+          .whereType<TileComponent>()
+          .any((c) => !trackedIds.contains(c.tile.id));
+      if (hasGhosts || _components.length != _width * _height) {
+        needsRebuild = true;
+      }
+    }
+
+    if (needsRebuild) {
+      debugPrint('BoardComponent: view drift detected – rebuilding from model');
+      await _buildFromModel();
+    }
+  }
 
   /// Reports any cell where the on-screen mirror disagrees with the model.
   ///

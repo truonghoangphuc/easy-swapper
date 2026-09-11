@@ -77,11 +77,10 @@ void main() {
   });
 
   group('LeaderboardService', () {
-    test('placeholder ids are recognised as unconfigured', () {
-      // Submitting to a placeholder id silently does nothing on the platform
-      // side, so the service checks first and says so in the log.
-      expect(LeaderboardIds.android, startsWith('REPLACE_WITH'));
-      expect(LeaderboardIds.configured, isFalse);
+    test('real leaderboard ids are configured', () {
+      // Both platforms have real (non-placeholder) IDs set.
+      expect(LeaderboardIds.android, isNot(startsWith('REPLACE_WITH')));
+      expect(LeaderboardIds.configured, isTrue);
     });
 
     test('submitting and showing are safe while unconfigured', () async {

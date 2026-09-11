@@ -235,6 +235,19 @@ bool comparisonHolds(String compOp, double left, double right) {
   }
 }
 
+Iterable<List<String?>> _expandWildcards(List<String?> cells) sync* {
+  final idx = cells.indexOf('?');
+  if (idx == -1) {
+    yield cells;
+    return;
+  }
+  for (var i = 0; i <= 9; i++) {
+    final copy = List<String?>.from(cells);
+    copy[idx] = i.toString();
+    yield* _expandWildcards(copy);
+  }
+}
+
 /// Every candidate equation in [line], including mutually overlapping ones.
 ///
 /// Exposed mainly for tests; gameplay wants [findAllEquations].
@@ -252,43 +265,60 @@ List<EquationMatch> findCandidateEquations(
     // the original scan; runs below the minimum are simply not recorded.
     for (var end = start + 2; end < line.length; end++) {
       final subCells = line.sublist(start, end + 1);
-      if (subCells.contains(null) || subCells.any((c) => c!.isEmpty)) break;
+      if (subCells.contains(null) || subCells.any((c) => c != '?' && c!.isEmpty)) break;
 
-      final result = tokenize(subCells, indices.sublist(start, end + 1));
-      if (result == null) break;
-      final tokens = result[0] as List<dynamic>;
+      var anyTokenized = false;
+      var matched = false;
+      String? bestCompOp;
+      ScoreResult? bestScore;
 
-      // Exactly one comparison operator, or the run is not an equation.
-      var compIdx = -1;
-      var tooMany = false;
-      for (var k = 0; k < tokens.length; k++) {
-        if (isComparisonOp(tokens[k])) {
-          if (compIdx != -1) {
-            tooMany = true;
-            break;
+      for (final concreteCells in _expandWildcards(subCells)) {
+        final result = tokenize(concreteCells, indices.sublist(start, end + 1));
+        if (result == null) continue;
+        anyTokenized = true;
+
+        final tokens = result[0] as List<dynamic>;
+
+        // Exactly one comparison operator, or the run is not an equation.
+        var compIdx = -1;
+        var tooMany = false;
+        for (var k = 0; k < tokens.length; k++) {
+          if (isComparisonOp(tokens[k])) {
+            if (compIdx != -1) {
+              tooMany = true;
+              break;
+            }
+            compIdx = k;
           }
-          compIdx = k;
+        }
+        if (tooMany || compIdx == -1) continue;
+
+        final compOp = tokens[compIdx] as String;
+        final leftVal = evaluateExpression(tokens.sublist(0, compIdx));
+        final rightVal = evaluateExpression(tokens.sublist(compIdx + 1));
+        if (leftVal == null || rightVal == null) continue;
+        if (!comparisonHolds(compOp, leftVal, rightVal)) continue;
+
+        matched = true;
+        final scored = scoreEquation(concreteCells.cast<String>(), compOp);
+        if (bestScore == null || scored.score > bestScore.score) {
+          bestScore = scored;
+          bestCompOp = compOp;
         }
       }
-      if (tooMany) break;
-      if (compIdx == -1) continue;
 
-      final compOp = tokens[compIdx] as String;
-      final leftVal = evaluateExpression(tokens.sublist(0, compIdx));
-      final rightVal = evaluateExpression(tokens.sublist(compIdx + 1));
-      if (leftVal == null || rightVal == null) continue;
-      if (!comparisonHolds(compOp, leftVal, rightVal)) continue;
+      if (!anyTokenized) break;
+      if (!matched) continue;
       if (subCells.length < minRunLength) continue;
 
       final cells = subCells.cast<String>();
-      final scored = scoreEquation(cells, compOp);
       found.add(EquationMatch(
         start: start,
         end: end,
-        score: scored.score,
-        cells: cells,
-        feedback: scored.feedback,
-        comparison: compOp,
+        score: bestScore!.score,
+        cells: cells, // Keep original cells with '?' for UI
+        feedback: bestScore.feedback,
+        comparison: bestCompOp!,
       ));
     }
   }

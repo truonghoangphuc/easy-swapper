@@ -69,6 +69,9 @@ const Color bombColor = Color(0xFFFF4A2B);
 
 /// The identity colour of [tile].
 Color tileColor(Tile tile) {
+  if (tile.isStone) return const Color(0xFF606060); // Dark grey
+  if (tile.isFrozen) return const Color(0xFF80D8FF); // Light blue
+  if (tile.special == SpecialKind.wildcard) return const Color(0xFF9C27B0); // Purple
   if (tile.isBomb) return bombColor;
   return glyphColors[tile.glyph] ?? const Color(0xFF54708A);
 }

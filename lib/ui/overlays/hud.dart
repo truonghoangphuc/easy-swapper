@@ -13,21 +13,24 @@ import '../../services/leaderboard_service.dart';
 import '../../services/save_game_service.dart';
 import '../../main.dart';
 import '../theme/app_theme.dart';
+import 'quest_dialog.dart';
 
 class Hud extends StatelessWidget {
-  const Hud({required this.game, super.key});
+  const Hud({required this.game, this.onRestart, super.key});
 
   final SwapperGame game;
+  final VoidCallback? onRestart;
 
   @override
   Widget build(BuildContext context) {
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Row 1: score + moves/mode
             Row(
               children: [
                 Expanded(
@@ -37,7 +40,7 @@ class Hud extends StatelessWidget {
                         _Chip(label: 'SCORE', value: '$score'),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 10),
                 Expanded(
                   child: ValueListenableBuilder<int>(
                     valueListenable: game.movesRemaining,
@@ -48,28 +51,72 @@ class Hud extends StatelessWidget {
                     ),
                   ),
                 ),
-                if (LeaderboardService.isSupported) ...[
-                  const SizedBox(width: 8),
+              ],
+            ),
+            const SizedBox(height: 6),
+            // Row 2: icon buttons
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                if (LeaderboardService.isSupported)
                   _IconChip(
                     icon: Icons.leaderboard_rounded,
                     tooltip: 'Leaderboard',
                     onPressed: LeaderboardService.showLeaderboard,
                     active: false,
                   ),
-                ],
-                const SizedBox(width: 8),
+                _IconChip(
+                  icon: Icons.military_tech_rounded,
+                  tooltip: 'Daily Quests',
+                  onPressed: () {
+                    showDialog<void>(
+                      context: context,
+                      builder: (_) => QuestDialog(game: game),
+                    );
+                  },
+                  active: false,
+                ),
                 _IconChip(
                   icon: Icons.help_outline_rounded,
                   tooltip: 'How to play',
                   onPressed: game.toggleHelp,
                   active: false,
                 ),
-                const SizedBox(width: 8),
+                if (onRestart != null)
+                  _IconChip(
+                    icon: Icons.refresh_rounded,
+                    tooltip: 'Restart Level',
+                    onPressed: () {
+                      showDialog<void>(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          title: const Text('Restart Level?'),
+                          content: const Text(
+                              'Your current progress will be lost.'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('CANCEL'),
+                            ),
+                            TextButton(
+                              onPressed: () {
+                                Navigator.pop(context);
+                                onRestart!();
+                              },
+                              child: const Text('RESTART'),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                    active: false,
+                  ),
+                _MusicToggle(game: game),
                 _SoundToggle(game: game),
               ],
             ),
             if (game.level.objectives.isNotEmpty) ...[
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               _Objectives(game: game),
             ],
           ],
@@ -133,6 +180,25 @@ class _Chip extends StatelessWidget {
   }
 }
 
+class _MusicToggle extends StatelessWidget {
+  const _MusicToggle({required this.game});
+
+  final SwapperGame game;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: game.musicOn,
+      builder: (_, on, _) => _IconChip(
+        icon: on ? Icons.music_note_rounded : Icons.music_off_rounded,
+        tooltip: on ? 'Mute Music' : 'Unmute Music',
+        onPressed: game.toggleMusic,
+        active: on,
+      ),
+    );
+  }
+}
+
 class _SoundToggle extends StatelessWidget {
   const _SoundToggle({required this.game});
 
@@ -168,16 +234,18 @@ class _IconChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 56,
-      width: 56,
+      height: 44,
+      width: 44,
       child: IconButton(
         onPressed: onPressed,
         tooltip: tooltip,
+        iconSize: 22,
+        padding: EdgeInsets.zero,
         icon: Icon(icon, color: active ? AppColors.accent : AppColors.textDim),
         style: IconButton.styleFrom(
           backgroundColor: AppColors.boardBackground,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(10),
             side: const BorderSide(color: AppColors.gridLine, width: 1.5),
           ),
         ),

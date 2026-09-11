@@ -209,6 +209,10 @@ class TileGenerator {
     if (allowBomb && rng.nextDouble() < bombChance) {
       return Tile.bomb(ids.nextId());
     }
+    // Wildcards appear rarely — roughly one per three boards on average.
+    if (allowBomb && rng.nextDouble() < 0.015) {
+      return Tile.wildcard(ids.nextId());
+    }
     return allowOperator ? next() : nextDigit();
   }
 

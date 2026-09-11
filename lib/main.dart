@@ -2,6 +2,7 @@
 /// wiring. All gameplay lives in `lib/core` and `lib/game`.
 library;
 
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flame/game.dart';
@@ -13,13 +14,19 @@ import 'core/levels/level_data.dart';
 import 'core/levels/level_def.dart';
 import 'core/session/game_session.dart';
 import 'game/swapper_game.dart';
+import 'services/achievement_service.dart';
+import 'services/background_service.dart';
 import 'services/progress_service.dart';
+import 'services/quest_service.dart';
+import 'services/rating_service.dart';
 import 'services/save_game_service.dart';
 import 'ui/level_select_screen.dart';
 import 'ui/overlays/ad_banner.dart';
+import 'ui/overlays/deadlock_dialog.dart';
 import 'ui/overlays/help_panel.dart';
 import 'ui/overlays/hud.dart';
 import 'ui/theme/app_theme.dart';
+import 'ui/widgets/animated_background.dart';
 
 /// Plays itself, one hinted move at a time. For eyeballing the juice:
 ///
@@ -35,6 +42,7 @@ const int kBombPercent = int.fromEnvironment('bombpercent', defaultValue: -1);
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await ProgressService.init();
+  await QuestService.init();
   
   final resumeJson = await SaveGameService.load();
   GameSession? resumeSession;
@@ -88,6 +96,7 @@ class GameScreen extends StatefulWidget {
 
 class _GameScreenState extends State<GameScreen> {
   late SwapperGame _game;
+  late final BackgroundService _bgService = BackgroundService();
 
   /// Bumped on restart so the GameWidget rebuilds against a fresh game.
   int _generation = 0;
@@ -96,6 +105,55 @@ class _GameScreenState extends State<GameScreen> {
   void initState() {
     super.initState();
     _game = _newGame();
+    _game.score.addListener(_onScoreChanged);
+    _game.phase.addListener(_onPhaseChanged);
+    _game.deadlockPending.addListener(_onDeadlockPending);
+    _bgService.addListener(_onBackgroundChanged);
+    unawaited(RatingService.incrementSession());
+    unawaited(AchievementService.checkVeteran());
+  }
+
+  @override
+  void dispose() {
+    _game.score.removeListener(_onScoreChanged);
+    _game.phase.removeListener(_onPhaseChanged);
+    _game.deadlockPending.removeListener(_onDeadlockPending);
+    _bgService.removeListener(_onBackgroundChanged);
+    _bgService.dispose();
+    super.dispose();
+  }
+
+  void _onScoreChanged() {
+    _bgService.onScoreChanged(_game.score.value);
+  }
+
+  void _onBackgroundChanged() {
+    if (_game.audio.isReady) _game.audio.playBgm(_bgService.index);
+    unawaited(AchievementService.checkExplorer(_bgService.index));
+  }
+
+  void _onPhaseChanged() {
+    // Ask for a rating when the player wins a level or reaches a deadlock
+    // (they stayed long enough to care about the game).
+    final phase = _game.phase.value;
+    if (phase == SessionPhase.won || phase == SessionPhase.lost) {
+      unawaited(RatingService.maybeAsk());
+    }
+  }
+
+  void _onDeadlockPending() {
+    if (!_game.deadlockPending.value) return;
+    // Show the rewarded-ad dialog over the game. It calls resolveDeadlock()
+    // which unblocks the game loop's await.
+    if (!mounted) {
+      _game.resolveDeadlock(shuffle: false);
+      return;
+    }
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => DeadlockDialog(game: _game),
+    );
   }
 
   SwapperGame _newGame() => SwapperGame(
@@ -106,12 +164,20 @@ class _GameScreenState extends State<GameScreen> {
       );
 
   void _restart() {
+    _game.score.removeListener(_onScoreChanged);
+    _game.phase.removeListener(_onPhaseChanged);
+    _game.deadlockPending.removeListener(_onDeadlockPending);
+    _game.audio.stopBgm();
+    _bgService.reset();
     setState(() {
       _game = SwapperGame(
         level: widget.level,
         autoPlay: kAutoPlay,
         bombChance: kBombPercent < 0 ? null : kBombPercent / 100,
       );
+      _game.score.addListener(_onScoreChanged);
+      _game.phase.addListener(_onPhaseChanged);
+      _game.deadlockPending.addListener(_onDeadlockPending);
       _generation++;
     });
   }
@@ -120,13 +186,8 @@ class _GameScreenState extends State<GameScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: Container(
-        decoration: const BoxDecoration(
-          image: DecorationImage(
-            image: AssetImage('assets/images/bg.jpg'),
-            fit: BoxFit.cover,
-          ),
-        ),
+      body: AnimatedBackground(
+        service: _bgService,
         child: SafeArea(
           child: Center(
             // The board is square, so on a wide window it is letterboxed rather
@@ -138,7 +199,7 @@ class _GameScreenState extends State<GameScreen> {
                   // The HUD is a sibling of the board, not an overlay on top of
                   // it. As an overlay it covered the top row, and no amount of
                   // padding fixes that reliably once the camera starts scaling.
-                  Hud(game: _game),
+                  Hud(game: _game, onRestart: _restart),
                   Expanded(
                     child: GameWidget<SwapperGame>(
                       key: ValueKey(_generation),

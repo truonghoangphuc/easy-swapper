@@ -18,6 +18,8 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:games_services/games_services.dart' as gs;
 
+import 'achievement_service.dart';
+
 /// Leaderboard identifiers, overridable at build time so the placeholders never
 /// have to be edited into source.
 abstract final class LeaderboardIds {
@@ -54,6 +56,7 @@ class LeaderboardService {
     try {
       await gs.GamesServices.signIn();
       _signedIn = true;
+      AchievementService.markReady();
     } on Object catch (e) {
       debugPrint('LeaderboardService: sign-in declined or failed: $e');
       _signedIn = false;

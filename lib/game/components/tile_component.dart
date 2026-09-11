@@ -158,6 +158,12 @@ class TileComponent extends PositionComponent {
         );
 
   Tile tile;
+  
+  void thaw(Tile newTile) {
+    tile = newTile;
+    _base = tileColor(tile);
+    _flash = 1.0;
+  }
 
   /// 0 when idle, 1 at the peak of a clear flash.
   double _flash = 0;
@@ -173,7 +179,7 @@ class TileComponent extends PositionComponent {
   /// Free-running clock, so a bomb can throb independently of any effect.
   double _clock = 0;
 
-  late final Color _base = tileColor(tile);
+  late Color _base = tileColor(tile);
 
   late final double _gap = size.x * _gapFraction;
   late final Rect _outerRect =
@@ -395,14 +401,14 @@ class TileComponent extends PositionComponent {
     );
   }
 
-  /// Slides to [target] and straight back, for a rejected swap.
-  void nudgeTo(Vector2 target) {
-    final origin = position.clone();
+  /// Slides to [target] and straight back to [returnTo], for a rejected swap.
+  void nudgeTo(Vector2 target, {required Vector2 returnTo}) {
+    removeWhere((c) => c is MoveToEffect || c is MoveEffect || c is SequenceEffect);
     add(
       SequenceEffect([
         MoveToEffect(target, EffectController(duration: swapDuration)),
         MoveToEffect(
-          origin,
+          returnTo,
           EffectController(duration: swapDuration, curve: Curves.easeOutBack),
         ),
       ]),
@@ -412,6 +418,10 @@ class TileComponent extends PositionComponent {
   /// Falls to [target], with a distance-scaled duration so a long drop does not
   /// look slower than a short one.
   void fallTo(Vector2 target, {required int distance}) {
+    // Cancel any in-progress movement effects so a tile that is still sliding
+    // from a previous cascade step snaps cleanly to the new animation rather
+    // than fighting with it (which can leave the component off-screen).
+    removeWhere((c) => c is MoveToEffect || c is MoveEffect);
     add(
       MoveToEffect(
         target,
@@ -425,6 +435,8 @@ class TileComponent extends PositionComponent {
 
   /// Pops and removes itself after [delay] seconds.
   void popAndRemove({double delay = 0}) {
+    // Cancel any ongoing movement first so the pop plays from the correct cell.
+    removeWhere((c) => c is MoveToEffect || c is MoveEffect);
     add(
       SequenceEffect([
         ScaleEffect.to(

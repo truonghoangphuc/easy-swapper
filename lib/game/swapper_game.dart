@@ -13,14 +13,16 @@ import 'package:flame/components.dart';
 import 'package:flame/effects.dart';
 import 'package:flame/game.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart' show Color;
+import 'package:flutter/services.dart';
 
 import '../core/board/tile.dart';
 import '../core/board/tile_generator.dart';
 import '../core/levels/level_def.dart';
 import '../core/session/game_session.dart';
+import '../services/achievement_service.dart';
 import '../services/ad_service.dart';
 import '../services/leaderboard_service.dart';
+import '../services/quest_service.dart';
 import '../services/save_game_service.dart';
 import 'audio/audio_manager.dart';
 import 'components/board_component.dart';
@@ -28,6 +30,10 @@ import 'components/preview_component.dart';
 
 /// Pixel size of one cell in world space. The camera scales this to the device.
 const double cellSize = 100;
+
+/// The player's choice when the board deadlocks: watch an ad to shuffle
+/// (keeping the score) or decline and take the wipe.
+enum _DeadlockChoice { shuffle, wipe }
 
 /// Margin around the board, in world pixels.
 const double boardMargin = 24;
@@ -74,6 +80,7 @@ class SwapperGame extends FlameGame {
     this.autoPlay = false,
     double? bombChance,
     GameSession? session,
+    this.initialBgmIndex = 0,
   }) : session = session ?? GameSession(
           level: level,
           generator: TileGenerator(
@@ -92,7 +99,7 @@ class SwapperGame extends FlameGame {
   /// Plays hinted moves on a timer instead of waiting for input. A development
   /// aid for eyeballing the effects, never on in a normal run.
   final bool autoPlay;
-
+  final int initialBgmIndex;
   late final BoardComponent board;
   late final PreviewComponent preview;
 
@@ -110,6 +117,18 @@ class SwapperGame extends FlameGame {
 
   /// Mirrors [AudioManager.soundEnabled] so the HUD can render the mute button.
   final soundOn = ValueNotifier<bool>(true);
+
+  /// Mirrors [AudioManager.musicEnabled] so the HUD can render the music toggle.
+  final musicOn = ValueNotifier<bool>(true);
+
+  /// Fired when the board deadlocks, **before** it is wiped.
+  ///
+  /// The Flutter widget layer listens to this and can show a rewarded-ad dialog.
+  /// Call [resolveDeadlock] with the chosen action to unblock the game loop.
+  final deadlockPending = ValueNotifier<bool>(false);
+
+  // Internal completer used to pause the game loop while the dialog is open.
+  Completer<_DeadlockChoice>? _deadlockCompleter;
 
   int _feedbackTicks = 0;
   double _idleFor = 0;
@@ -174,12 +193,41 @@ class SwapperGame extends FlameGame {
 
   Future<void> _initAudio() async {
     await audio.init();
+    audio.playBgm(initialBgmIndex);
     soundOn.value = audio.soundEnabled;
+    musicOn.value = audio.musicEnabled;
   }
 
-  /// Flips mute, persisting the choice.
+  /// Flips SFX mute, persisting the choice.
   Future<void> toggleSound() async {
     soundOn.value = await audio.toggleSound();
+  }
+
+  /// Flips Music mute, persisting the choice.
+  Future<void> toggleMusic() async {
+    musicOn.value = await audio.toggleMusic();
+  }
+
+  /// Called by the Flutter overlay after the player makes a choice at deadlock.
+  ///
+  /// [shuffle] = true  → the player watched an ad; reshuffle keeping the score.
+  /// [shuffle] = false → the player declined;      wipe score (normal reset).
+  void resolveDeadlock({required bool shuffle}) {
+    _deadlockCompleter?.complete(
+      shuffle ? _DeadlockChoice.shuffle : _DeadlockChoice.wipe,
+    );
+    deadlockPending.value = false;
+  }
+
+  /// Pauses the game loop, fires [deadlockPending], and waits for [resolveDeadlock].
+  /// Returns whether the board should be shuffled (true) or wiped (false).
+  Future<bool> waitForDeadlockChoice() async {
+    if (!level.isEndless) return false; // Only in endless mode.
+    _deadlockCompleter = Completer<_DeadlockChoice>();
+    deadlockPending.value = true;
+    final choice = await _deadlockCompleter!.future;
+    _deadlockCompleter = null;
+    return choice == _DeadlockChoice.shuffle;
   }
 
   @override
@@ -200,7 +248,8 @@ class SwapperGame extends FlameGame {
       return;
     }
 
-    if (_idleFor >= hintDelay) {
+    final delay = session.isTutorialActive ? 0.5 : hintDelay;
+    if (_idleFor >= delay) {
       _idleFor = 0;
       board.showHint();
     }
@@ -209,7 +258,10 @@ class SwapperGame extends FlameGame {
   // --- callbacks from the board -------------------------------------------
 
   /// The player's swap was accepted and the tiles are sliding.
-  void onSwapAccepted() => audio.play(Sfx.swap);
+  void onSwapAccepted() {
+    audio.play(Sfx.swap);
+    unawaited(HapticFeedback.selectionClick());
+  }
 
   /// A step of a cascade finished resolving.
   ///
@@ -220,6 +272,16 @@ class SwapperGame extends FlameGame {
     score.value = session.score;
     if (step.feedback.isNotEmpty) _say(step.feedback);
 
+    // Track quests and achievements
+    unawaited(QuestService.tryGetInstance()?.onScoreUpdated(session.score) ?? Future.value());
+    unawaited(AchievementService.checkScore(session.score));
+    for (final match in step.matches) {
+      unawaited(AchievementService.checkBigEquation(match.equation.length));
+      for (final glyph in match.equation.cells) {
+        unawaited(QuestService.tryGetInstance()?.onEquationCleared(glyph) ?? Future.value());
+      }
+    }
+
     // One clip per step, never one per cell: a fifteen-cell blast firing
     // fifteen overlapping clears is noise, not feedback.
     if (!step.isBlast) {
@@ -228,6 +290,7 @@ class SwapperGame extends FlameGame {
         // Each link of a cascade lands a little louder than the last.
         volume: 0.45 + 0.08 * step.cascadeIndex.clamp(0, 3),
       );
+      unawaited(HapticFeedback.mediumImpact());
     }
   }
 
@@ -237,14 +300,26 @@ class SwapperGame extends FlameGame {
   /// A whole turn finished, board settled.
   void onTurnResolved(SwapResult result) {
     _idleFor = 0;
+    
+    final chainLength = result.steps.length;
+    if (chainLength > 0) {
+      unawaited(QuestService.tryGetInstance()?.onCascade(chainLength) ?? Future.value());
+      unawaited(AchievementService.checkCascadeKing(chainLength));
+    }
+    
     unawaited(preview.sync());
     _publish();
     unawaited(SaveGameService.save(session));
   }
 
-  void onSwapRejected() {
+  void onSwapRejected(SwapRejection reason) {
     _idleFor = 0;
     audio.play(Sfx.reject, volume: 0.35);
+    unawaited(HapticFeedback.selectionClick());
+    
+    if (reason == SwapRejection.tutorialLock) {
+      _say('Swap the highlighted tiles!');
+    }
   }
 
   /// A bomb went off. Kept separate from [onStepResolved] so audio and haptics
@@ -252,7 +327,9 @@ class SwapperGame extends FlameGame {
   void onDetonation(ResolveStep step) {
     _idleFor = 0;
     audio.play(Sfx.boom, volume: 0.7);
-    
+    unawaited(HapticFeedback.heavyImpact());
+    unawaited(AchievementService.checkDemolition(session.bombsDetonated));
+
     // Intense camera shake for the bomb impact
     camera.viewfinder.add(
       MoveEffect.by(
@@ -271,6 +348,7 @@ class SwapperGame extends FlameGame {
     _idleFor = 0;
     unawaited(preview.sync());
     audio.play(Sfx.gameOver, volume: 0.6);
+    unawaited(HapticFeedback.heavyImpact());
     _say('NO MOVES LEFT');
     // The run is over even though play continues, so this is where its score
     // goes to the leaderboard.
@@ -304,12 +382,15 @@ class SwapperGame extends FlameGame {
 
   @override
   void onRemove() {
+    // Cancel any in-flight deadlock dialog so the game loop doesn't hang.
+    _deadlockCompleter?.complete(_DeadlockChoice.wipe);
     score.dispose();
     movesRemaining.dispose();
     phase.dispose();
     feedback.dispose();
     objectiveProgress.dispose();
     soundOn.dispose();
+    deadlockPending.dispose();
     unawaited(audio.dispose());
     super.onRemove();
   }
