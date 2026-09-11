@@ -82,10 +82,29 @@ HOW IT WORKS
 • Longer runs and harder operators multiply your score
 • Clears cascade — falling bricks that land on a new equation chain it
 
-BOMBS
+BOMBS AND LIGHTNING
 
 Now and then a bomb arrives. Swap it with anything at all and it detonates,
 clearing its entire row and column. Bombs caught in the blast chain into it.
+
+Rarer still is the lightning brick. Swap it onto any brick and every brick
+showing that same glyph is destroyed, wherever it sits on the board. Swap two
+together and every digit goes at once, and a bomb blast that reaches one sets
+it off rather than wasting it.
+
+LOCKED BRICKS
+
+Deeper into an Endless run, bricks start arriving sealed. You can see what is
+trapped behind the stone or the diamond, but it will not move and no equation
+can run through it. Resolve a run beside it and the casing cracks — stone
+takes one hit, diamond two. A bomb or a lightning brick is the only thing you
+can swap straight into one, which is how you open a board that has locked up.
+
+STAGES
+
+Endless changes as you climb. The board starts leaning on equals; past 500
+points it deals far more greater-than and less-than, then multiply and divide,
+then lightning. Deeper stages pay substantially better per move.
 They are the way out of a tight board, so spend them when you are stuck, not
 when you are winning.
 

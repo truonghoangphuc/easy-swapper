@@ -67,14 +67,37 @@ const Map<String, Color> glyphColors = {
 /// Fill colour for a bomb tile.
 const Color bombColor = Color(0xFFFF4A2B);
 
-/// The identity colour of [tile].
+/// Fill colour for an electric tile, and the colour its arcs are drawn in.
+///
+/// A cold, high-voltage blue that no digit uses, so a discharge never reads as
+/// one of the glyph colours flaring up.
+const Color electricColor = Color(0xFF2BB7FF);
+
+/// The casing over a stone brick: cold grey rock, opaque enough to read as
+/// solid but not so dark that the glyph behind it disappears.
+const Color stoneColor = Color(0xFF7C8797);
+
+/// The casing over a diamond brick. Pale ice with a blue cast, so the two
+/// casings are told apart by hue as well as by the facet pattern.
+const Color diamondColor = Color(0xFFA9E5F5);
+
+/// The identity colour of [tile], ignoring any casing over it.
+///
+/// Shards and popups use this so a brick breaking out of stone throws pieces
+/// in its own colour. [casingColor] is what the block itself is painted.
 Color tileColor(Tile tile) {
-  if (tile.isStone) return const Color(0xFF606060); // Dark grey
-  if (tile.isFrozen) return const Color(0xFF80D8FF); // Light blue
-  if (tile.special == SpecialKind.wildcard) return const Color(0xFF9C27B0); // Purple
+  if (tile.isWildcard) return const Color(0xFF9C27B0);
   if (tile.isBomb) return bombColor;
+  if (tile.isElectric) return electricColor;
   return glyphColors[tile.glyph] ?? const Color(0xFF54708A);
 }
+
+/// The colour the block is actually painted, casing included.
+Color blockColor(Tile tile) => switch (tile.armor) {
+      Armor.none => tileColor(tile),
+      Armor.stone => stoneColor,
+      _ => diamondColor,
+    };
 
 /// Glyph colour that stays legible on [fill].
 Color glyphColorOn(Color fill) => fill.computeLuminance() > 0.45

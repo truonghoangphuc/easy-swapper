@@ -24,8 +24,14 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>GADApplicationIdentifier</key>
+	<string>ca-app-pub-5104291908556139~1994329205</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSUserTrackingUsageDescription</key>
+	<string>This identifier is used to show you more relevant ads.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -53,31 +59,15 @@
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
+	<key>UIRequiresFullScreen</key>
+	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<!-- AdMob application id. The Mobile Ads SDK aborts at launch if this
-	     key is absent or malformed. -->
-	<key>GADApplicationIdentifier</key>
-	<string>ca-app-pub-5104291908556139~1994329205</string>
-	<!-- No encryption beyond what the OS provides. Declaring it here skips the
-	     export-compliance question on every single upload. -->
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
-	<!-- Shown when the Mobile Ads SDK asks for tracking permission. Without a
-	     usage description the prompt cannot be presented and App Review
-	     rejects the build. -->
-	<key>NSUserTrackingUsageDescription</key>
-	<string>This identifier is used to show you more relevant ads.</string>
 </dict>
 </plist>

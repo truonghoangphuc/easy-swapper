@@ -31,10 +31,13 @@ abstract final class Sfx {
   /// A deep cascade, or a bomb going off.
   static const boom = 'levelup.mp3';
 
+  /// An electric discharging across the board.
+  static const zap = 'zap.mp3';
+
   /// The board deadlocked and the run was wiped.
   static const gameOver = 'gameover.mp3';
 
-  static const all = [swap, reject, drop, clear, boom, gameOver];
+  static const all = [swap, reject, drop, clear, boom, zap, gameOver];
 }
 
 class AudioManager {

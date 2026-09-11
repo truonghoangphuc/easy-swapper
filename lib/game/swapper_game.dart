@@ -17,10 +17,10 @@ import 'package:flutter/services.dart';
 
 import '../core/board/tile.dart';
 import '../core/board/tile_generator.dart';
+import '../core/levels/difficulty_ramp.dart';
 import '../core/levels/level_def.dart';
 import '../core/session/game_session.dart';
 import '../services/achievement_service.dart';
-import '../services/ad_service.dart';
 import '../services/leaderboard_service.dart';
 import '../services/quest_service.dart';
 import '../services/save_game_service.dart';
@@ -115,6 +115,12 @@ class SwapperGame extends FlameGame {
   /// Objective progress, one fraction per objective, in level order.
   final objectiveProgress = ValueNotifier<List<double>>(const []);
 
+  /// Which rung of the difficulty ramp the run is on, for the HUD pip.
+  ///
+  /// Only endless has a ramp with more than one stage; everywhere else this
+  /// notifier simply never changes.
+  final stage = ValueNotifier<DifficultyStage>(DifficultyStage.warmUp);
+
   /// Mirrors [AudioManager.soundEnabled] so the HUD can render the mute button.
   final soundOn = ValueNotifier<bool>(true);
 
@@ -132,6 +138,9 @@ class SwapperGame extends FlameGame {
 
   int _feedbackTicks = 0;
   double _idleFor = 0;
+
+  /// The stage the player has already been told about.
+  int _announcedStage = 0;
 
   @override
   Color backgroundColor() => const Color(0x00000000);
@@ -187,8 +196,12 @@ class SwapperGame extends FlameGame {
     // to stop the game: a missing clip costs silence, a missing fill costs an
     // empty banner slot, a declined sign-in costs a leaderboard.
     unawaited(_initAudio());
-    unawaited(AdService.init());
-    unawaited(LeaderboardService.signIn());
+
+    // Ads and leaderboards are *not* started here. They are app-level
+    // concerns, bootstrapped once in `main`, and starting them from the game
+    // meant that building a SwapperGame - which a widget test does routinely -
+    // reached for the AdMob and UMP platform channels. Audio stays because it
+    // is per-game state: this game's clips, this game's mute setting.
   }
 
   Future<void> _initAudio() async {
@@ -271,6 +284,7 @@ class SwapperGame extends FlameGame {
   void onStepResolved(ResolveStep step) {
     score.value = session.score;
     if (step.feedback.isNotEmpty) _say(step.feedback);
+    _announceStage();
 
     // Track quests and achievements
     unawaited(QuestService.tryGetInstance()?.onScoreUpdated(session.score) ?? Future.value());
@@ -284,7 +298,7 @@ class SwapperGame extends FlameGame {
 
     // One clip per step, never one per cell: a fifteen-cell blast firing
     // fifteen overlapping clears is noise, not feedback.
-    if (!step.isBlast) {
+    if (!step.isDischarge) {
       audio.play(
         step.cascadeIndex >= 2 ? Sfx.boom : Sfx.clear,
         // Each link of a cascade lands a little louder than the last.
@@ -320,24 +334,37 @@ class SwapperGame extends FlameGame {
     if (reason == SwapRejection.tutorialLock) {
       _say('Swap the highlighted tiles!');
     }
+    // Without this a pinned brick reads as the game ignoring the drag: it
+    // nudges and rejects exactly like an illegal swap, and nothing says why.
+    if (reason == SwapRejection.lockedTile) {
+      _say('BREAK THE CASING FIRST!');
+    }
   }
 
-  /// A bomb went off. Kept separate from [onStepResolved] so audio and haptics
-  /// can fire on the flare rather than on the score.
-  void onDetonation(ResolveStep step) {
+  /// A power-up went off. Kept separate from [onStepResolved] so audio and
+  /// haptics can fire on the flare rather than on the score.
+  void onDischarge(ResolveStep step) {
     _idleFor = 0;
-    audio.play(Sfx.boom, volume: 0.7);
-    unawaited(HapticFeedback.heavyImpact());
-    unawaited(AchievementService.checkDemolition(session.bombsDetonated));
+    // A discharge that also set a bomb off plays the bomb, which is the
+    // bigger event; a pure discharge gets its own clip.
+    audio.play(step.isBlast ? Sfx.boom : Sfx.zap, volume: 0.7);
+    unawaited(
+      step.isZap
+          ? HapticFeedback.mediumImpact()
+          : HapticFeedback.heavyImpact(),
+    );
+    if (step.isBlast) {
+      unawaited(AchievementService.checkDemolition(session.bombsDetonated));
+    }
 
-    // Intense camera shake for the bomb impact
+    // A bomb punches; an electric shivers. Same effect, different character.
     camera.viewfinder.add(
       MoveEffect.by(
-        Vector2(6, 6),
+        step.isBlast ? Vector2(6, 6) : Vector2(3, 3),
         EffectController(
           duration: 0.04,
           alternate: true,
-          repeatCount: 8,
+          repeatCount: step.isBlast ? 8 : 5,
         ),
       ),
     );
@@ -346,6 +373,7 @@ class SwapperGame extends FlameGame {
   /// The board deadlocked: the run was wiped and a new board dealt.
   void onBoardReset() {
     _idleFor = 0;
+    _announcedStage = 0;
     unawaited(preview.sync());
     audio.play(Sfx.gameOver, volume: 0.6);
     unawaited(HapticFeedback.heavyImpact());
@@ -358,6 +386,19 @@ class SwapperGame extends FlameGame {
     _publish();
   }
 
+  /// Calls out a stage change the moment the score crosses into it.
+  ///
+  /// Without this the board simply starts behaving differently - stranger
+  /// glyph mix, bricks that will not move - and the player has no way to know
+  /// why. The chip in the HUD is the persistent version; this is the moment.
+  void _announceStage() {
+    if (session.stageIndex == _announcedStage) return;
+    _announcedStage = session.stageIndex;
+    stage.value = session.stage;
+    if (session.stageIndex == 0) return; // a wipe, already announced its own
+    _say('${session.stage.name}!');
+  }
+
   void _say(String message) {
     feedback.value = (message, ++_feedbackTicks);
   }
@@ -366,6 +407,7 @@ class SwapperGame extends FlameGame {
     score.value = session.score;
     movesRemaining.value = session.movesRemaining;
     phase.value = session.phase;
+    stage.value = session.stage;
     objectiveProgress.value = [
       for (final objective in level.objectives) session.progressOn(objective),
     ];
@@ -387,6 +429,7 @@ class SwapperGame extends FlameGame {
     score.dispose();
     movesRemaining.dispose();
     phase.dispose();
+    stage.dispose();
     feedback.dispose();
     objectiveProgress.dispose();
     soundOn.dispose();

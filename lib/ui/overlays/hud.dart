@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/levels/level_data.dart';
 import '../../core/session/game_session.dart';
+import '../../core/levels/difficulty_ramp.dart';
 import '../../game/swapper_game.dart';
 import '../../services/leaderboard_service.dart';
 import '../../services/save_game_service.dart';
@@ -42,14 +43,28 @@ class Hud extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: ValueListenableBuilder<int>(
-                    valueListenable: game.movesRemaining,
-                    builder: (_, moves, _) => _Chip(
-                      label: game.level.isEndless ? 'MODE' : 'MOVES',
-                      value: game.level.isEndless ? 'ENDLESS' : '$moves',
-                      highlight: !game.level.isEndless && moves <= 5,
-                    ),
-                  ),
+                  // In endless the second chip carries the difficulty stage
+                  // rather than a move count, because there is no move count
+                  // and the stage is the one thing about the run that
+                  // silently changes underneath the player.
+                  child: game.level.isEndless
+                      ? ValueListenableBuilder<DifficultyStage>(
+                          valueListenable: game.stage,
+                          builder: (_, stage, _) => _Chip(
+                            label: 'STAGE',
+                            value: stage.name,
+                            highlight: stage.maxObstacles >
+                                DifficultyStage.warmUp.maxObstacles,
+                          ),
+                        )
+                      : ValueListenableBuilder<int>(
+                          valueListenable: game.movesRemaining,
+                          builder: (_, moves, _) => _Chip(
+                            label: 'MOVES',
+                            value: '$moves',
+                            highlight: moves <= 5,
+                          ),
+                        ),
                 ),
               ],
             ),

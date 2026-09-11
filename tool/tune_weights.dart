@@ -16,6 +16,7 @@ import 'dart:math';
 import 'package:easy_swapper/core/board/move_solver.dart';
 import 'package:easy_swapper/core/board/tile.dart';
 import 'package:easy_swapper/core/board/tile_generator.dart';
+import 'package:easy_swapper/core/levels/difficulty_ramp.dart';
 import 'package:easy_swapper/core/levels/level_def.dart';
 import 'package:easy_swapper/core/session/game_session.dart';
 
@@ -25,6 +26,10 @@ const int boardSize = 8;
 void main(List<String> args) {
   if (args.contains('playout')) {
     measurePlayouts();
+    return;
+  }
+  if (args.contains('stages')) {
+    measureStages();
     return;
   }
 
@@ -185,4 +190,127 @@ void measurePlayouts() {
         '${lengths.first.toString().padLeft(5)} '
         '${'$survived/$runs'.padLeft(9)}');
   });
+}
+
+
+/// Measures the endless difficulty ramp, one stage at a time.
+///
+///     dart run tool/tune_weights.dart stages
+///
+/// Columns: `open` is opening legal moves, `life` is moves survived before a
+/// deadlock wipe, `pts/mv` is score per move, `adj%` is operators sitting
+/// beside another, `obst` is the mean count of non-tokenizing bricks on the
+/// board, and `wipes` is how many of the sampled runs died inside the cap.
+///
+/// **Read `life` and `pts/mv` together, never `life` alone.** An encased brick
+/// blocks matches from forming, so the board drains its comparison stock more
+/// slowly and a run lasts *longer in moves* while accomplishing less per move.
+/// Moves-until-deadlock on its own says obstacles make the game easier, which
+/// is an artefact of the metric.
+///
+/// The finding that shaped the shipped table, and it contradicted the plan:
+/// **the obstacle bricks are not a difficulty mechanic on this board.** Bombs
+/// and electrics make every adjacent swap legal, which postpones deadlock
+/// outright; casings slow the drain on comparisons, and the comparison floor
+/// tops the board up regardless of how many are sealed. Raising the obstacle
+/// budget measurably *extends* runs. So the budgets below are set for how the
+/// board reads - roughly 2% of cells at the opening rising to 12% at the top -
+/// and not to hit a survival target, because they cannot hit one.
+///
+/// What is left to hold:
+///
+///   * `open` stays inside 8 to 15 at every stage
+///   * `adj%` stays under 56%
+///   * `obst` stays under an eighth of the board
+///   * `pts/mv` rises with the stage - getting deeper should pay better
+///
+void measureStages() {
+  const runs = 40;
+  const cap = 320;
+  const ramp = DifficultyRamp.endless;
+
+  print('');
+  print('endless difficulty ramp (tier3, minRun 3)');
+  print('  ${'stage'.padRight(10)} ${'=share'.padLeft(7)} ${'open'.padLeft(6)} '
+      '${'life'.padLeft(7)} ${'p10'.padLeft(5)} ${'pts/mv'.padLeft(7)} '
+      '${'adj%'.padLeft(6)} ${'obst'.padLeft(5)} ${'wipes'.padLeft(6)}');
+
+  for (var index = 0; index < ramp.stages.length; index++) {
+    final stage = ramp.stages[index];
+    final opens = <int>[];
+    final lives = <int>[];
+    var adjacent = 0;
+    var operators = 0;
+    var obstacleTotal = 0;
+    var wipes = 0;
+    var points = 0;
+    var totalMoves = 0;
+
+    for (var seed = 0; seed < runs; seed++) {
+      final rng = Random(seed);
+      final generator = TileGenerator(
+        operators: OperatorSet.tier3,
+        ids: TileIdGenerator(),
+        rng: rng,
+        stage: stage,
+      );
+      // The stage is pinned rather than reached by scoring, so each rung is
+      // measured on its own terms. A level with a flat ramp holds whatever
+      // stage its generator was built with.
+      final level = LevelDef(
+        id: 0,
+        moves: -1,
+        minRunLength: 3,
+        operators: OperatorSet.tier3,
+        objectives: const [],
+        starThresholds: const [1, 2, 3],
+        ramp: DifficultyRamp([stage]),
+      );
+      final session = GameSession(level: level, generator: generator);
+      opens.add(findAllLegalMoves(session.board).length);
+
+      var moves = 0;
+      while (moves < cap) {
+        final legal = findAllLegalMoves(session.board);
+        if (legal.isEmpty) break;
+        final move = legal[rng.nextInt(legal.length)];
+        final result = session.trySwap(move.a, move.b);
+        moves++;
+        adjacent += session.board.adjacentOperators().length;
+        operators += session.board.operatorCount();
+        obstacleTotal += session.board.obstacleCells().length;
+        points += result.totalScore;
+        if (result.boardReset) {
+          wipes++;
+          break;
+        }
+      }
+      totalMoves += moves;
+      lives.add(moves);
+    }
+
+    opens.sort();
+    lives.sort();
+    final openMean = opens.reduce((a, b) => a + b) / opens.length;
+    final lifeMean = lives.reduce((a, b) => a + b) / lives.length;
+    final adjPct = operators == 0 ? 0.0 : adjacent * 100 / operators;
+    final eq = stage.weights.equalityShareFor(OperatorSet.tier3);
+
+    // Points per move is the metric that survives the obstacle mechanic.
+    // Moves-until-deadlock alone is misleading: an encased brick blocks
+    // matches from forming, so the board drains its comparison stock more
+    // slowly and the run lasts *longer in moves* while accomplishing less per
+    // move. Only the two read together say whether a stage is harder.
+    final perMove = totalMoves == 0 ? 0.0 : points / totalMoves;
+
+    print('  ${stage.name.padRight(10)} '
+        '${'${(eq * 100).round()}%'.padLeft(7)} '
+        '${openMean.toStringAsFixed(1).padLeft(6)} '
+        '${lifeMean.toStringAsFixed(1).padLeft(7)} '
+        '${lives[(lives.length * 0.1).floor()].toString().padLeft(5)} '
+        '${perMove.toStringAsFixed(1).padLeft(7)} '
+        '${adjPct.toStringAsFixed(1).padLeft(6)} '
+        '${(totalMoves == 0 ? 0.0 : obstacleTotal / totalMoves).toStringAsFixed(1).padLeft(5)} '
+        '${'$wipes/$runs'.padLeft(6)}');
+  }
 }

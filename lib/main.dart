@@ -7,6 +7,7 @@ import 'dart:math';
 
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'core/board/tile_generator.dart';
 import 'core/board/tile.dart';
@@ -15,6 +16,8 @@ import 'core/levels/level_def.dart';
 import 'core/session/game_session.dart';
 import 'game/swapper_game.dart';
 import 'services/achievement_service.dart';
+import 'services/ad_service.dart';
+import 'services/leaderboard_service.dart';
 import 'services/background_service.dart';
 import 'services/progress_service.dart';
 import 'services/quest_service.dart';
@@ -41,8 +44,20 @@ const int kBombPercent = int.fromEnvironment('bombpercent', defaultValue: -1);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Portrait only. The manifest and Info.plist lock it at the OS level; this
+  // covers the gap on Android, where a manifest lock is ignored if the user has
+  // forced rotation on per-app, and makes the intent visible in Dart.
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+
   await ProgressService.init();
   await QuestService.init();
+
+  // Ads and leaderboards start here, once, and deliberately unawaited: neither
+  // may delay the first frame, and neither failing may stop the game. AdService
+  // runs the UMP consent flow itself before touching an ad request.
+  unawaited(AdService.init());
+  unawaited(LeaderboardService.signIn());
   
   final resumeJson = await SaveGameService.load();
   GameSession? resumeSession;

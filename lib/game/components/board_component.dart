@@ -7,12 +7,13 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flame/components.dart';
 import 'package:flame/effects.dart';
 import 'package:flame/events.dart';
 import 'package:flutter/animation.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:flutter/material.dart' show Canvas, Paint, RRect, Radius, Rect;
 
 import '../../core/board/board_model.dart';
@@ -284,11 +285,16 @@ class BoardComponent extends PositionComponent
     final cleared = step.cleared.toList()
       ..sort((p, q) => p.y == q.y ? p.x.compareTo(q.x) : p.y.compareTo(q.y));
 
-    if (step.isBlast) await _playDetonation(step);
+    if (step.isDischarge) await _playDischarge(step);
 
-    // A blast covers a whole row and column at once, so its stagger has to be
-    // much tighter or the tail of the cross lags a second behind the flash.
-    final stagger = step.isBlast ? clearStagger * 0.25 : clearStagger;
+    // A power-up takes a whole cross, or every brick of one glyph, at once, so
+    // its stagger starts much tighter or the tail of the sweep lags a second
+    // behind the flash. Either way the whole wave is held inside
+    // [maxClearWindow], so a big cascade step speeds up rather than dragging.
+    final baseStagger = step.isDischarge ? clearStagger * 0.25 : clearStagger;
+    final stagger = cleared.length < 2
+        ? 0.0
+        : math.min(baseStagger, maxClearWindow / (cleared.length - 1));
 
     for (var i = 0; i < cleared.length; i++) {
       final cell = cleared[i];
@@ -300,18 +306,28 @@ class BoardComponent extends PositionComponent
       component.popAndRemove(delay: delay);
       _components.remove(component.tile.id);
       unawaited(
-        _shatterAfter(delay, cell, component.tile, inBlast: step.isBlast),
+        _shatterAfter(delay, cell, component.tile, inBlast: step.isDischarge),
       );
     }
-    
-    for (final cell in step.thawed) {
-      final component = _componentAt(cell);
-      if (component != null) {
-        final newTile = session.board.atCoord(cell);
-        if (newTile != null) {
-           component.thaw(newTile); 
-        }
-      }
+
+    // Cracked bricks stay on the board, so they are repainted in place rather
+    // than removed and rebuilt - the component keeps its identity, and with it
+    // any fall it is part of later in this same step.
+    for (final entry in step.cracked.entries) {
+      // Found by tile id, never by re-reading the cell: the model compacted
+      // and refilled the moment the step resolved, so whatever sits at this
+      // coordinate now is very probably a different brick.
+      final component = _components[entry.value.id];
+      if (component == null) continue;
+      component.crack(entry.value);
+      add(
+        crackBurstAt(
+          centerOf(entry.key),
+          color:
+              entry.value.armor >= Armor.diamond ? diamondColor : stoneColor,
+          cellSize: cellSize,
+        ),
+      );
     }
 
     _showFeedback(step);
@@ -394,9 +410,13 @@ class BoardComponent extends PositionComponent
     ]);
   }
 
-  /// The moment a bomb goes off: a flare at each detonation point and a
-  /// shockwave that sweeps out along the arms of the cross.
-  Future<void> _playDetonation(ResolveStep step) async {
+  /// The moment a power-up goes off.
+  ///
+  /// A bomb gets a flare and a shockwave sweeping out along the arms of its
+  /// cross. An electric gets an arc to every brick it is about to take, and
+  /// those are what the whole feature is for - the sweep has to be legible as
+  /// "all of *those*, because of *that* one" before anything starts popping.
+  Future<void> _playDischarge(ResolveStep step) async {
     for (final origin in step.detonations) {
       if (!isMounted) return;
       await addAll([
@@ -409,26 +429,75 @@ class BoardComponent extends PositionComponent
         ),
       ]);
     }
-    game.onDetonation(step);
-    // Let the flare read before the cross starts clearing.
-    await _sleep(0.16);
+
+    for (final zap in step.zaps) {
+      if (!isMounted) return;
+      final from = centerOf(zap.origin);
+      // Nearest first, so the sweep reads as spreading outward from the
+      // electric rather than arriving in grid order.
+      final targets = zap.targets.toList()
+        ..sort(
+          (p, q) => (from - centerOf(p))
+              .length
+              .compareTo((from - centerOf(q)).length),
+        );
+
+      final arcs = <Component>[
+        flashAt(from, radius: cellSize * 1.3, color: electricColor),
+      ];
+      for (var i = 0; i < targets.length; i++) {
+        final delay = i * 0.03;
+        arcs
+          ..add(
+            lightningTo(
+              from,
+              centerOf(targets[i]),
+              color: electricColor,
+              startDelay: delay,
+            ),
+          )
+          ..add(
+            flashAt(
+              centerOf(targets[i]),
+              radius: cellSize * 0.5,
+              color: electricColor,
+              lifespan: 0.20,
+              // Lands with its own bolt, not with the first one.
+              startDelay: delay,
+            ),
+          );
+      }
+      await addAll(arcs);
+    }
+
+    game.onDischarge(step);
+    // Let the arcs land before the bricks start popping. An electric needs
+    // longer than a bomb: its arcs are staggered, and cutting them off halfway
+    // loses the causal read.
+    await _sleep(step.isZap ? 0.34 : 0.16);
   }
 
   /// Raises the celebration line and the score popup for a resolved step.
   void _showFeedback(ResolveStep step) {
-    if (step.cleared.isEmpty) return;
+    // A step that only cracked casings still cleared nothing, and it still
+    // scored - anchoring on the cracks is what stops that turn looking like
+    // nothing happened.
+    final anchors = step.cleared.isNotEmpty
+        ? step.cleared
+        : step.cracked.keys.toSet();
+    if (anchors.isEmpty) return;
 
     // Anchor the popup on the run itself so the player's eye stays where the
     // action was, rather than being pulled to a fixed HUD corner.
     var sx = 0.0;
     var sy = 0.0;
-    for (final cell in step.cleared) {
+    for (final cell in anchors) {
       sx += cell.x;
       sy += cell.y;
     }
     final centre = Vector2(
-      (sx / step.cleared.length + 0.5) * cellSize,
-      (sy / step.cleared.length + 0.5) * cellSize,
+      (sx / anchors.length + 0.5) * cellSize,
+      (sy / anchors.length + 0.5) * cellSize,
     );
 
     add(
@@ -439,7 +508,7 @@ class BoardComponent extends PositionComponent
       ),
     );
 
-    final message = step.isBlast
+    final message = step.isDischarge
         ? step.feedback
         : step.cascadeIndex >= 2
             ? 'INCREDIBLE! \u{1F525}'
@@ -522,21 +591,23 @@ class BoardComponent extends PositionComponent
     }
   }
 
-  /// Drops a saved bomb onto a random non-bomb cell and rebuilding the view.
+  /// Drops a saved bomb onto a random ordinary cell and rebuilds the view.
   Future<void> dropBomb() async {
-    final nonBombs = <Coord>[];
+    final targets = <Coord>[];
     for (var y = 0; y < session.board.height; y++) {
       for (var x = 0; x < session.board.width; x++) {
         final coord = Coord(x, y);
-        final tile = session.board.atCoord(coord);
-        if (tile != null && !tile.isBomb) {
-          nonBombs.add(coord);
+        // Never land on another obstacle. Overwriting an electric would spend
+        // one power-up to place another, and overwriting a casing would hand
+        // back a cell the player was part way through earning.
+        if (!(session.board.atCoord(coord)?.isObstacle ?? true)) {
+          targets.add(coord);
         }
       }
     }
-    if (nonBombs.isEmpty) return;
+    if (targets.isEmpty) return;
 
-    final target = nonBombs[session.generator.rng.nextInt(nonBombs.length)];
+    final target = targets[session.generator.rng.nextInt(targets.length)];
     session.board.setCoord(target, Tile.bomb(session.generator.ids.nextId()));
     
     // Quick flare effect before rebuilding
@@ -659,6 +730,11 @@ class BoardComponent extends PositionComponent
       await _buildFromModel();
     }
   }
+
+  /// Rebuilds every component from the model. Test seam, for fixtures that
+  /// write tiles straight onto the board.
+  @visibleForTesting
+  Future<void> rebuildForTest() => _buildFromModel();
 
   /// Reports any cell where the on-screen mirror disagrees with the model.
   ///

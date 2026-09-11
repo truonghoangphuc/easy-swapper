@@ -6,6 +6,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../../services/consent_service.dart';
 import '../theme/app_theme.dart';
 
 class HelpPanel extends StatelessWidget {
@@ -101,10 +102,46 @@ class HelpPanel extends StatelessWidget {
                                 'board that has stopped offering you moves.',
                           ),
                           _Rule(
+                            'Stone and diamond are locked',
+                            'A locked brick shows you what it is but will not '
+                                'move, and no equation can run through it. '
+                                'Clear a run in any cell touching it and the '
+                                'casing takes one hit — however many of its '
+                                'neighbours went, it is still one hit. Stone '
+                                'breaks in one, diamond in two. Breaking a '
+                                'brick free pays four times what chipping it '
+                                'does, and it plays normally from then on.',
+                          ),
+                          _Rule(
+                            'Power-ups open locked bricks',
+                            'A bomb or a lightning brick is the one thing you '
+                                'can swap straight into a casing, and a blast '
+                                'or a strike counts as a hit. That is the way '
+                                'out of a board that has locked up on you.',
+                          ),
+                          _Rule(
+                            'Lightning clears a kind',
+                            'Swap the sparking brick with any other and every '
+                                'brick showing that same glyph goes, wherever '
+                                'it is. Swap two together and every digit '
+                                'goes. Swap it into a bomb and it takes '
+                                'whichever glyph is commonest instead. A blast '
+                                'that reaches a lightning brick sets it off '
+                                'too, so the two chain.',
+                          ),
+                          _Rule(
                             'NEXT is a promise, not a hint',
                             'The strip above the board is the brick queued for '
                                 'each column, and it is exactly what will land '
                                 'there. Plan two moves ahead.',
+                          ),
+                          _Rule(
+                            'Endless gets stranger as you climb',
+                            'The chip at the top right names the stage. Past '
+                                '500 points the board stops leaning on = and '
+                                'deals more < and >, then more of everything '
+                                'else - and the locked bricks start arriving '
+                                'with it.',
                           ),
                           _Rule(
                             'No moves means no score',
@@ -114,6 +151,7 @@ class HelpPanel extends StatelessWidget {
                                 'so a board crowded with them is a board '
                                 'running out of room.',
                           ),
+                          _PrivacyOptions(),
                         ],
                       ),
                     ),
@@ -122,6 +160,32 @@ class HelpPanel extends StatelessWidget {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The "manage ad privacy" entry point.
+///
+/// UMP requires a way to reopen the consent form for users in a consent
+/// region, and requires it *not* be shown to anyone else - so this renders
+/// nothing at all unless the SDK says the option is required.
+class _PrivacyOptions extends StatelessWidget {
+  const _PrivacyOptions();
+
+  @override
+  Widget build(BuildContext context) {
+    if (!ConsentService.privacyOptionsRequired) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 8),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          onPressed: ConsentService.showPrivacyOptions,
+          icon: const Icon(Icons.privacy_tip_outlined, size: 18),
+          label: const Text('Manage ad privacy choices'),
+          style: TextButton.styleFrom(foregroundColor: AppColors.accent),
         ),
       ),
     );

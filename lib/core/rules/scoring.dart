@@ -88,3 +88,41 @@ ScoreResult scoreBlast(int cellCount) {
   }
   return ScoreResult(score, feedback);
 }
+
+/// Scores an electric discharge that took out [cellCount] bricks.
+///
+/// Shaped like [scoreBlast] - flat per cell, escalating tiers - because it
+/// takes no aim either. The base rate is higher: a bomb always clears a full
+/// cross whatever it is swapped into, while an electric's haul depends on how
+/// many of one glyph happen to be out there, and half the time that is three
+/// or four bricks scattered across the board.
+///
+/// The tiers sit lower than the blast's for the same reason. Fourteen matching
+/// bricks is a far rarer event than a fourteen-cell cross.
+ScoreResult scoreElectric(int cellCount) {
+  var score = cellCount * 4;
+  var feedback = 'ZAP! \u{26A1}';
+  if (cellCount > 4) {
+    feedback = 'ZAP! GOOD JOB! \u{26A1}\u{1F44D}';
+  }
+  if (cellCount > 8) {
+    score += (cellCount - 8) * 3;
+    feedback = 'CHAIN LIGHTNING! \u{26A1}\u{1F31F}';
+  }
+  if (cellCount > 12) {
+    score += (cellCount - 12) * 6;
+    feedback = 'THUNDERSTRUCK! \u{26A1}\u{1F631}';
+  }
+  return ScoreResult(score, feedback);
+}
+
+/// Scores one impact on an encased brick.
+///
+/// [armorLeft] is what the casing is down to *after* the hit, so zero means
+/// the brick came free. Freeing it is worth most of the value: cracking a
+/// diamond halfway is progress, but it is the release that gives the player a
+/// cell back.
+ScoreResult scoreCrack(int armorLeft) {
+  if (armorLeft > 0) return const ScoreResult(2, '');
+  return const ScoreResult(8, 'BROKEN OUT! \u{1F48E}');
+}

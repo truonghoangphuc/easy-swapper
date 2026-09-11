@@ -1,4 +1,5 @@
 import 'package:easy_swapper/services/ad_service.dart';
+import 'package:easy_swapper/services/consent_service.dart';
 import 'package:easy_swapper/services/leaderboard_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -73,6 +74,68 @@ void main() {
           reason: '$id is not a Google demo unit',
         );
       }
+    });
+  });
+
+  group('ConsentService', () {
+    setUp(ConsentService.resetForTest);
+    tearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      ConsentService.resetForTest();
+    });
+
+    test('starts unresolved and refusing ads', () {
+      // The default has to be "no". Anything else means a request could go out
+      // before UMP has answered, which is the violation the SDK exists to
+      // prevent.
+      expect(ConsentService.isResolved, isFalse);
+      expect(ConsentService.canRequestAds, isFalse);
+      expect(ConsentService.privacyOptionsRequired, isFalse);
+    });
+
+    test('resolves immediately on a platform with no UMP', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      expect(ConsentService.isSupported, isFalse);
+
+      await ConsentService.gather();
+
+      expect(ConsentService.isResolved, isTrue);
+      expect(ConsentService.canRequestAds, isFalse,
+          reason: 'nothing to consent to, and nothing to serve either');
+    });
+
+    test('gather is idempotent', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      await ConsentService.gather();
+      await expectLater(ConsentService.gather(), completes);
+      expect(ConsentService.isResolved, isTrue);
+    });
+
+    // The UMP failure path is not exercised here on purpose. flutter_test
+    // reports the platform as Android, so `gather` would reach the real SDK,
+    // and `requestConsentInfoUpdate` throws from inside an unawaited future in
+    // the plugin - the error escapes any catch this code could write, exactly
+    // like `MobileAds.instance` does. The platform guard is what protects
+    // production; there is nothing here left to assert that the guard test
+    // above does not already cover.
+
+    test('showing privacy options is a no-op when not required', () async {
+      // UMP requires the entry point be hidden outside consent regions, so
+      // calling it anyway must do nothing rather than present a form.
+      expect(ConsentService.privacyOptionsRequired, isFalse);
+      await expectLater(ConsentService.showPrivacyOptions(), completes);
+    });
+  });
+
+  group('ads are gated on consent', () {
+    setUp(ConsentService.resetForTest);
+    tearDown(ConsentService.resetForTest);
+
+    test('no ad is requested while consent is unresolved', () {
+      expect(ConsentService.canRequestAds, isFalse);
+      expect(AdService.banner(() {}), isNull);
+      expect(AdService.loadRewardedAd, returnsNormally);
+      expect(AdService.hasRewardedAd, isFalse);
     });
   });
 

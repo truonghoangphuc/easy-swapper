@@ -27,6 +27,19 @@ flutter_launcher_icons:
   android: true
   ios: true
   remove_alpha_ios: true
+  # Android 8 and up ignores the square icon and asks for an adaptive pair.
+  # Without these the launcher letterboxes the logo inside a white circle,
+  # which looks like a bug rather than a brand.
+  #
+  # The inset matters: an adaptive icon's outer ~25% can be masked away by the
+  # launcher's shape, so the logo is shrunk inside the safe zone rather than
+  # having its edges cropped.
+  adaptive_icon_background: "#0A0E16"
+  adaptive_icon_foreground: "assets/images/easy_swapper_logo.png"
+  adaptive_icon_foreground_inset: 20
+  # Android 13 themed (monochrome) icon, used when the user turns on themed
+  # icons. Falls back to the adaptive pair when they have not.
+  adaptive_icon_monochrome: "assets/images/easy_swapper_logo.png"
   macos:
     generate: true
     image_path: "assets/images/easy_swapper_logo.png"

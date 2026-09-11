@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 import '../../services/ad_service.dart';
+import '../../services/consent_service.dart';
 
 class AdBanner extends StatefulWidget {
   const AdBanner({super.key});
@@ -21,10 +22,16 @@ class AdBanner extends StatefulWidget {
 
 class _AdBannerState extends State<AdBanner> {
   /// `AdService.init` runs in the background, so the first request can land
-  /// before the SDK is up. A few retries cover that; after them, give up
-  /// quietly rather than polling for the life of the session.
-  static const int _maxAttempts = 5;
-  static const Duration _retryDelay = Duration(seconds: 2);
+  /// before the SDK is up. Retries cover that; after them, give up quietly
+  /// rather than polling for the life of the session.
+  ///
+  /// The budget has to outlast the consent flow, not just SDK start-up: in the
+  /// EEA a form is shown and the player reads it at their own pace, and
+  /// `AdService.banner` returns null for the whole of that. Retrying stops when
+  /// consent is *resolved and refused*, so a decline costs one attempt, not
+  /// twenty.
+  static const int _maxAttempts = 20;
+  static const Duration _retryDelay = Duration(seconds: 3);
 
   BannerAd? _ad;
   bool _loaded = false;
@@ -55,6 +62,10 @@ class _AdBannerState extends State<AdBanner> {
       _ad = ad;
       return;
     }
+
+    // A settled "no" is final; only an unsettled consent state is worth waiting
+    // on.
+    if (ConsentService.isResolved && !ConsentService.canRequestAds) return;
 
     if (++_attempts >= _maxAttempts) return;
     _retry = Timer(_retryDelay, () {

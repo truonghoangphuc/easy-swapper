@@ -17,6 +17,8 @@ library;
 import 'package:flutter/foundation.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
+import 'consent_service.dart';
+
 /// Google's documented test units. Safe to commit, safe to ship by accident.
 abstract final class DemoAdUnits {
   static const androidAppId = 'ca-app-pub-3940256099942544~3347511713';
@@ -97,9 +99,15 @@ class AdService {
         : DemoAdUnits.androidRewarded;
   }
 
+  /// Initialises the SDK, after consent has been resolved.
+  ///
+  /// Initialising is always allowed; *requesting* an ad before UMP has
+  /// answered is the policy breach, which is why every request below checks
+  /// [ConsentService.canRequestAds] rather than checking it once here.
   static Future<void> init() async {
     if (!isSupported || _initialised) return;
     try {
+      await ConsentService.gather();
       await MobileAds.instance.initialize();
       _initialised = true;
       loadRewardedAd();
@@ -108,12 +116,16 @@ class AdService {
     }
   }
 
+  /// Whether an ad may be requested right now.
+  static bool get _mayRequest =>
+      isSupported && _initialised && ConsentService.canRequestAds;
+
   /// The banner, loaded once and reused.
   ///
   /// [onLoaded] fires when it is ready to show; until then the caller should
   /// reserve no space, or the layout jumps.
   static BannerAd? banner(VoidCallback onLoaded) {
-    if (!isSupported || !_initialised) return null;
+    if (!_mayRequest) return null;
     if (_bannerAd != null) return _bannerAd;
 
     _bannerAd = BannerAd(
@@ -134,7 +146,7 @@ class AdService {
   }
 
   static void loadRewardedAd() {
-    if (!isSupported || !_initialised) return;
+    if (!_mayRequest) return;
     RewardedAd.load(
       adUnitId: _rewardedUnitId,
       request: const AdRequest(),

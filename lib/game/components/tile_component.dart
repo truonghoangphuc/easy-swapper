@@ -22,6 +22,7 @@ import 'package:flutter/material.dart'
         Alignment,
         Path,
         StrokeCap,
+        StrokeJoin,
         Canvas,
         Color,
         FontWeight,
@@ -48,6 +49,16 @@ const double popDuration = 0.26;
 /// Seconds of delay between each tile in a clearing run, so a long equation
 /// resolves as a wave rather than all at once. Tuned in easy-mathriss.
 const double clearStagger = 0.06;
+
+/// Longest the stagger of one clearing step may run, in seconds.
+///
+/// The stagger is per cell, and nothing bounded it. A cascade step taking
+/// twenty-four cells at 0.06s each spends 1.4 seconds just popping, and a
+/// chain of eight such steps left one turn animating for thirteen seconds
+/// while input sat locked. Big steps now tighten their spacing instead of
+/// running long: the wave still reads left to right, it just travels faster
+/// the more there is to clear.
+const double maxClearWindow = 0.42;
 
 /// Gap between blocks, as a fraction of the cell. Small: a glass-block wall is
 /// mortared tight, and wide gutters make the board read as loose counters.
@@ -158,11 +169,30 @@ class TileComponent extends PositionComponent {
         );
 
   Tile tile;
-  
-  void thaw(Tile newTile) {
-    tile = newTile;
-    _base = tileColor(tile);
-    _flash = 1.0;
+
+  /// Swaps in [next] after an impact took a layer of casing off.
+  ///
+  /// The brick never leaves the board, so this is a repaint rather than a
+  /// rebuild: the block changes colour, the glyph brightens as it comes out
+  /// from under the stone, and a flash marks the hit.
+  void crack(Tile next) {
+    tile = next;
+    _base = blockColor(tile);
+    _paints = null;
+    _flash = 1;
+    _syncLabel();
+    add(
+      SequenceEffect([
+        ScaleEffect.to(
+          Vector2.all(1.14),
+          EffectController(duration: 0.07, curve: Curves.easeOutQuad),
+        ),
+        ScaleEffect.to(
+          Vector2.all(1),
+          EffectController(duration: 0.16, curve: Curves.elasticOut),
+        ),
+      ]),
+    );
   }
 
   /// 0 when idle, 1 at the peak of a clear flash.
@@ -179,7 +209,7 @@ class TileComponent extends PositionComponent {
   /// Free-running clock, so a bomb can throb independently of any effect.
   double _clock = 0;
 
-  late Color _base = tileColor(tile);
+  late Color _base = blockColor(tile);
 
   late final double _gap = size.x * _gapFraction;
   late final Rect _outerRect =
@@ -201,34 +231,58 @@ class TileComponent extends PositionComponent {
 
   @override
   Future<void> onLoad() async {
-    // A bomb is drawn, not written. It used to carry the bomb emoji, which
-    // depends on the platform having a colour emoji font with that codepoint -
-    // on Windows it came out as a tofu box, and at preview size it was
-    // unreadable. Vector art renders the same everywhere and scales cleanly.
-    if (tile.isBomb) return;
+    await _syncLabel();
+  }
+
+  /// Creates, restyles or removes the glyph label to match [tile].
+  ///
+  /// A bomb and an electric are drawn, not written. They used to carry emoji,
+  /// which depends on the platform having a colour emoji font with that
+  /// codepoint - on Windows the bomb came out as a tofu box, and at preview
+  /// size it was unreadable. Vector art renders the same everywhere.
+  Future<void> _syncLabel() async {
+    if (tile.isBomb || tile.isElectric) {
+      _label?.removeFromParent();
+      _label = null;
+      return;
+    }
+
+    final style = TextStyle(
+      fontFamily: 'Baloo2',
+      // The glyph under a casing is dimmed, not hidden. Seeing what is coming
+      // is the whole reason an encased brick is worth cracking rather than
+      // working around, so it has to stay legible.
+      color: glyphColorOn(_base).withValues(alpha: switch (tile.armor) {
+        Armor.none => 1.0,
+        Armor.stone => 0.5,
+        _ => 0.72,
+      }),
+      fontSize: size.x * 0.50,
+      fontWeight: FontWeight.w800,
+      height: 1,
+      shadows: [
+        // Seats the glyph inside the glass rather than on top of it.
+        Shadow(
+          color: darken(_base, 0.35).withValues(alpha: 0.7),
+          blurRadius: size.x * 0.05,
+          offset: Offset(0, size.x * 0.015),
+        ),
+      ],
+    );
+
+    final existing = _label;
+    if (existing != null) {
+      existing.textRenderer = TextPaint(style: style);
+      existing.text = tile.glyph;
+      return;
+    }
 
     await add(
       _label = TextComponent(
         text: tile.glyph,
         anchor: Anchor.center,
         position: size / 2,
-        textRenderer: TextPaint(
-          style: TextStyle(
-              fontFamily: 'Baloo2',
-            color: glyphColorOn(_base),
-            fontSize: size.x * 0.50,
-            fontWeight: FontWeight.w800,
-            height: 1,
-            shadows: [
-              // Seats the glyph inside the glass rather than on top of it.
-              Shadow(
-                color: darken(_base, 0.35).withValues(alpha: 0.7),
-                blurRadius: size.x * 0.05,
-                offset: Offset(0, size.x * 0.015),
-              ),
-            ],
-          ),
-        ),
+        textRenderer: TextPaint(style: style),
       ),
     );
   }
@@ -255,6 +309,12 @@ class TileComponent extends PositionComponent {
     if (tile.isBomb) {
       final throb = 0.5 + 0.5 * math.sin(_clock * 5);
       c = Color.lerp(c, lighten(c, 0.16), throb)!;
+    }
+    if (tile.isElectric) {
+      // Faster and harder than the bomb's slow menace: this one is charged,
+      // not fused.
+      final throb = 0.5 + 0.5 * math.sin(_clock * 8);
+      c = Color.lerp(c, lighten(c, 0.24), throb)!;
     }
     return c;
   }
@@ -297,6 +357,8 @@ class TileComponent extends PositionComponent {
     canvas.drawRRect(_outer, paints.rimEdge);
 
     if (tile.isBomb) _drawBomb(canvas);
+    if (tile.isElectric) _drawElectric(canvas);
+    if (tile.isEncased) _drawCasing(canvas);
 
     _drawSelection(canvas);
 
@@ -374,6 +436,158 @@ class TileComponent extends PositionComponent {
       c * 0.10 * spark,
       Paint()..color = const Color(0xFFFFB300).withValues(alpha: 0.45),
     );
+  }
+
+  /// The casing over an encased brick.
+  ///
+  /// Two looks, told apart by hue and by cut: stone is opaque, angular and
+  /// chipped; diamond is translucent with a clean gem facet. They are the same
+  /// mechanic at different depths - a diamond that takes a hit becomes a stone
+  /// - so reading one as a harder version of the other is exactly right.
+  ///
+  /// Drawn before `super.render`, which puts it *under* the glyph. The point of
+  /// an encased brick is that you can see what is trapped in it.
+  void _drawCasing(Canvas canvas) {
+    canvas.save();
+    canvas.clipRRect(_face);
+    if (tile.armor >= Armor.diamond) {
+      _drawDiamondFacets(canvas);
+    } else {
+      _drawStoneChips(canvas);
+    }
+    canvas.restore();
+
+    // A hard inner line where the casing meets the bevel, so the brick reads
+    // as filled rather than merely tinted.
+    canvas.drawRRect(
+      _face,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = size.x * 0.035
+        ..color = (tile.armor >= Armor.diamond
+                ? const Color(0xFFFFFFFF)
+                : const Color(0xFF3A424E))
+            .withValues(alpha: 0.55),
+    );
+  }
+
+  /// Irregular rock chips, seeded off the tile id.
+  ///
+  /// Seeded rather than random so a stone brick looks the same on every frame
+  /// and every rebuild - a casing that reshuffles itself as the board
+  /// compacts reads as a glitch.
+  void _drawStoneChips(Canvas canvas) {
+    final c = size.x;
+    final r = math.Random(tile.id);
+    final dark = Paint()..color = const Color(0xFF5A636F).withValues(alpha: 0.55);
+    final light = Paint()..color = const Color(0xFFC3CCD8).withValues(alpha: 0.40);
+
+    for (var i = 0; i < 5; i++) {
+      final cx = _faceRect.left + r.nextDouble() * _faceRect.width;
+      final cy = _faceRect.top + r.nextDouble() * _faceRect.height;
+      final radius = c * (0.07 + r.nextDouble() * 0.10);
+      final path = Path();
+      for (var v = 0; v < 5; v++) {
+        final angle = (v / 5) * math.pi * 2 + r.nextDouble() * 0.5;
+        final reach = radius * (0.6 + r.nextDouble() * 0.6);
+        final px = cx + math.cos(angle) * reach;
+        final py = cy + math.sin(angle) * reach;
+        v == 0 ? path.moveTo(px, py) : path.lineTo(px, py);
+      }
+      path.close();
+      canvas.drawPath(path, i.isEven ? dark : light);
+    }
+  }
+
+  /// A cut gem: four facets meeting at an off-centre table, plus a bright rim.
+  void _drawDiamondFacets(Canvas canvas) {
+    final table = Offset(
+      _faceRect.center.dx - size.x * 0.04,
+      _faceRect.center.dy - size.x * 0.05,
+    );
+    final corners = [
+      _faceRect.topLeft,
+      _faceRect.topRight,
+      _faceRect.bottomRight,
+      _faceRect.bottomLeft,
+    ];
+
+    for (var i = 0; i < 4; i++) {
+      final path = Path()
+        ..moveTo(table.dx, table.dy)
+        ..lineTo(corners[i].dx, corners[i].dy)
+        ..lineTo(corners[(i + 1) % 4].dx, corners[(i + 1) % 4].dy)
+        ..close();
+      // Alternate the facets light and dark so the cut catches an edge.
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = (i.isEven
+                  ? const Color(0xFFFFFFFF)
+                  : const Color(0xFF3FA8D8))
+              .withValues(alpha: i.isEven ? 0.22 : 0.18),
+      );
+      canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = size.x * 0.012
+          ..strokeJoin = StrokeJoin.round
+          ..color = const Color(0xFFFFFFFF).withValues(alpha: 0.38),
+      );
+    }
+  }
+
+  /// An electric: a charged core with bolts snapping off it.
+  ///
+  /// Drawn rather than written, for the same reason the bomb is.
+  void _drawElectric(Canvas canvas) {
+    final c = size.x;
+    final centre = Offset(c * 0.5, c * 0.52);
+    final pulse = 0.82 + 0.18 * math.sin(_clock * 11);
+
+    canvas.drawCircle(
+      centre,
+      c * 0.19 * pulse,
+      Paint()..color = const Color(0xFF0C3B5C),
+    );
+    canvas.drawCircle(
+      centre,
+      c * 0.13 * pulse,
+      Paint()..color = const Color(0xFFE7F8FF).withValues(alpha: 0.92),
+    );
+
+    // Six bolts, alternating length, rotating slowly so the tile never sits
+    // completely still on the board.
+    final bolt = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = c * 0.035
+      ..strokeCap = StrokeCap.round
+      ..color = const Color(0xFFFFFFFF).withValues(alpha: 0.85);
+    for (var i = 0; i < 6; i++) {
+      final angle = _clock * 0.9 + (i / 6) * math.pi * 2;
+      final inner = c * 0.20;
+      final outer = c * (i.isEven ? 0.36 : 0.29) * pulse;
+      final mid = (inner + outer) / 2;
+      // A kink halfway out is what makes it a bolt rather than a spoke.
+      final kink = angle + 0.30;
+      canvas.drawPath(
+        Path()
+          ..moveTo(
+            centre.dx + math.cos(angle) * inner,
+            centre.dy + math.sin(angle) * inner,
+          )
+          ..lineTo(
+            centre.dx + math.cos(kink) * mid,
+            centre.dy + math.sin(kink) * mid,
+          )
+          ..lineTo(
+            centre.dx + math.cos(angle) * outer,
+            centre.dy + math.sin(angle) * outer,
+          ),
+        bolt,
+      );
+    }
   }
 
   void _drawSelection(Canvas canvas) {

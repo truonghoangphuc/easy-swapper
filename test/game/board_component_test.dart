@@ -166,6 +166,86 @@ void main() {
     });
   });
 
+  group('the new brick types render and resolve', () {
+    // These go through the real Flame pipeline rather than asserting on the
+    // model, because the casing art, the electric art, the crack repaint and
+    // the lightning arcs are all paint code - and paint code that throws only
+    // shows up when something paints it.
+
+    testWidgets('a board full of casings and electrics paints', (tester) async {
+      final game = await bootGame(tester);
+      final board = game.session.board;
+
+      // Seal a diagonal and drop in two electrics, then force the view to
+      // rebuild from the model so the components pick the new tiles up.
+      for (var i = 0; i < 8; i++) {
+        board.setCoord(
+          Coord(i, i),
+          board.at(i, i)!.encased(i.isEven ? Armor.stone : Armor.diamond),
+        );
+      }
+      board.setCoord(const Coord(0, 7), Tile.electric(board.ids.nextId()));
+      board.setCoord(const Coord(7, 0), Tile.electric(board.ids.nextId()));
+
+      await game.board.rebuildForTest();
+      // Several frames so the throbbing art advances its clock and repaints.
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+
+      expect(tester.takeException(), isNull);
+      expect(game.board.debugViewDrift(), isEmpty);
+    });
+
+    testWidgets('an electric discharge animates without drift',
+        (tester) async {
+      final game = await bootGame(tester);
+      final board = game.session.board;
+
+      // An electric beside a digit that appears several times over.
+      board.setCoord(const Coord(3, 3), Tile.electric(board.ids.nextId()));
+      await game.board.rebuildForTest();
+
+      await pumpUntilDone(
+        tester,
+        game.board.attemptSwap(const Coord(3, 3), const Coord(3, 4)),
+      );
+
+      expect(tester.takeException(), isNull);
+      expect(game.board.debugViewDrift(), isEmpty);
+      expect(board.tiles, hasLength(64));
+    });
+
+    testWidgets('a cracked brick is repainted, not orphaned', (tester) async {
+      // The regression behind the worst bug in this change: playback used to
+      // find the cracked brick by re-reading its cell, but by then the model
+      // had compacted and refilled past it, so the component was handed a
+      // different tile and the view drifted out of sync with the board.
+      final game = await bootGame(tester, seed: 3);
+      final board = game.session.board;
+
+      for (var x = 0; x < 8; x++) {
+        for (var y = 4; y < 8; y++) {
+          if ((x + y).isEven) continue;
+          board.setCoord(Coord(x, y), board.at(x, y)!.encased(Armor.diamond));
+        }
+      }
+      await game.board.rebuildForTest();
+
+      for (var turn = 0; turn < 5; turn++) {
+        final move = game.session.hint();
+        if (move == null) break;
+        await pumpUntilDone(tester, game.board.attemptSwap(move.a, move.b));
+        expect(tester.takeException(), isNull, reason: 'turn $turn threw');
+        expect(
+          game.board.debugViewDrift(),
+          isEmpty,
+          reason: 'drift after turn $turn',
+        );
+      }
+    });
+  });
+
   group('hint', () {
     testWidgets('marks exactly the two tiles of a legal move', (tester) async {
       final game = await bootGame(tester);

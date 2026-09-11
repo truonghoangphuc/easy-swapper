@@ -55,9 +55,29 @@ class TileQueue {
   /// How many queued tiles are bombs, for the same reason.
   int bombCount() => _slots.where((t) => t?.isBomb ?? false).length;
 
+  /// How many queued tiles are electrics.
+  int electricCount() => _slots.where((t) => t?.isElectric ?? false).length;
+
+  /// How many queued tiles arrive encased, at any depth.
+  int encasedCount() => _slots.where((t) => t?.isEncased ?? false).length;
+
+  /// How many queued tiles arrive as diamonds specifically.
+  int diamondCount() =>
+      _slots.where((t) => (t?.armor ?? 0) >= Armor.diamond).length;
+
   /// How many queued tiles are comparison glyphs.
   int comparisonCount() =>
       _slots.where((t) => t?.kind == TileKind.comparison).length;
+
+  /// Queued comparison glyphs, counted by glyph, for the mix balancer.
+  Map<String, int> comparisonMix() {
+    final mix = <String, int>{};
+    for (final tile in _slots) {
+      if (tile == null || tile.kind != TileKind.comparison) continue;
+      mix.update(tile.glyph, (v) => v + 1, ifAbsent: () => 1);
+    }
+    return mix;
+  }
 
   void clear() {
     for (var x = 0; x < width; x++) {

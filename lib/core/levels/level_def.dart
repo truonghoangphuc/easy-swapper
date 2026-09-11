@@ -1,6 +1,8 @@
 /// Level definitions. Data, not logic, so tuning never touches the engine.
 library;
 
+import 'difficulty_ramp.dart';
+
 /// The glyph alphabet available at a given difficulty tier.
 ///
 /// Mirrors the level gating in `easy-mathriss/lib/game/block_generator.dart`,
@@ -101,6 +103,7 @@ class LevelDef {
     required this.starThresholds,
     this.width = 8,
     this.height = 8,
+    this.ramp = DifficultyRamp.flat,
   });
 
   final int id;
@@ -119,6 +122,15 @@ class LevelDef {
 
   final int width;
   final int height;
+
+  /// How the draw changes as the score climbs.
+  ///
+  /// Flat by default, and every one of the twenty shipped levels leaves it
+  /// that way: each was tuned against a measured opening-move count, and a
+  /// ramp that widened the comparison mix or dealt obstacles halfway through
+  /// would quietly invalidate that work. Endless, which has no such structure
+  /// to protect, is where the ramp earns its keep.
+  final DifficultyRamp ramp;
 
   bool get isEndless => moves < 0;
 

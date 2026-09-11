@@ -192,6 +192,46 @@ void main() {
     });
   });
 
+  group('fromJson repairs a save it cannot trust', () {
+    test('duplicate tile ids are reissued', () {
+      // Tile ids key the render layer's components, so two cells sharing one
+      // id means two cells sharing one component - a view that can never agree
+      // with the model again. Saves written by earlier builds really do
+      // contain these: the generator used to restart its counter at zero on
+      // restore while the board kept the saved one.
+      final board = boardFrom(['12', '34']);
+      final json = board.toJson();
+      final grid = json['grid'] as List;
+      final topLeft = (grid[0] as List)[0] as Map<String, dynamic>;
+      final bottomLeft = (grid[1] as List)[0] as Map<String, dynamic>;
+      // Force a collision: bottom-left now carries the same id as top-left.
+      bottomLeft['id'] = topLeft['id'];
+
+      final restored = BoardModel.fromJson(json);
+      final ids = restored.tiles.map((t) => t.id).toList();
+
+      expect(ids.toSet(), hasLength(ids.length), reason: 'still duplicated');
+      expect(restored.tiles, hasLength(4), reason: 'no tile was dropped');
+      expect(
+        restored.debugString(),
+        board.debugString(),
+        reason: 'only the id was repaired, not the glyph',
+      );
+    });
+
+    test('the id counter is lifted above everything on the board', () {
+      final board = boardFrom(['12', '34']);
+      final json = board.toJson();
+      // A counter that lags the grid - the shape a partial write leaves.
+      (json['ids'] as Map<String, dynamic>)['next'] = 0;
+
+      final restored = BoardModel.fromJson(json);
+      final highest =
+          restored.tiles.map((t) => t.id).reduce((a, b) => a > b ? a : b);
+      expect(restored.ids.nextId(), greaterThan(highest));
+    });
+  });
+
   group('allSwapPairs', () {
     test('lists every orthogonal pair exactly once', () {
       final board = boardFrom(['12', '34']);

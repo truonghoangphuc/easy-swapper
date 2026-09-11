@@ -82,6 +82,65 @@ A blast pays a flat rate per brick rather than the equation multipliers, so it
 is worth points but never as many as the run you could have built. Save bombs
 for a board that has stopped offering you anything.
 
+## Lightning
+
+The sparking brick is rarer than a bomb — never more than two on the board.
+
+**Swap it with any brick and every brick showing that same glyph is
+destroyed**, wherever it is. Swap it onto a 7 and every 7 goes. It pays more
+per brick than a bomb does, because a bomb always clears a full cross while a
+lightning strike only gets as much as the board happens to be holding.
+
+Swap two of them together and every digit on the board goes at once.
+
+Swap it with another power-up, which has no glyph of its own, and it falls
+back to whichever glyph is commonest at that moment.
+
+A bomb blast that reaches a lightning brick **sets it off** rather than
+destroying it, the same way one bomb chains into another. A cross through two
+of them is worth setting up.
+
+## Stone and diamond
+
+Some bricks arrive sealed. A **stone** brick is behind one layer, a
+**diamond** behind two.
+
+You can see what is trapped in there, but it will not move and no equation can
+run through it. A sealed brick is a hole in the board until you break it out.
+
+**Resolve a run in a cell next to it and the casing takes a hit.** Up, down,
+left or right — not diagonally. However many of its neighbours cleared at
+once, it is still one hit per casing per step, so surrounding it does not
+speed things up; hitting it on separate turns does.
+
+A bomb blast or a lightning strike counts as a hit too, and a power-up is the
+only thing that can be swapped straight into a casing. That is what makes
+bombs and lightning the reliable answer to a board that has locked up.
+
+One hit breaks stone. A diamond takes one hit to become stone, and another to
+come free. Breaking a brick out pays four times what chipping one does, and
+the freed brick is ordinary from the next scan on — it cannot join the very
+run that freed it.
+
+Power-ups are paid for what they actually destroy, so a blast that only
+cracks casings scores the cracks, not the bricks it failed to break.
+
+Sealed bricks only appear in Endless, and only once you are past the first
+stage.
+
+## Stages, in Endless
+
+The chip at the top right names the stage you are in, and it changes as your
+score climbs.
+
+The board starts leaning on `=`. Past **500** points it starts dealing many
+more `<` and `>`, which makes true statements far easier to find, and the
+first sealed bricks arrive with them. Further up, multiply and divide get more
+common, lightning appears, and more of the board is sealed at any one time.
+
+Deeper stages are not harsher — they pay substantially better per move. A
+deadlock wipes your score, and it takes the stage back to the start with it.
+
 ## The NEXT strip
 
 The row above the board is not a hint. It is the brick queued for each column,
@@ -92,7 +151,8 @@ falls to the bottom of the gap, with anything else stacking on top. Then a new
 brick takes its place in the strip.
 
 Use it. Knowing that a `=` is about to land in the fourth column changes which
-swap you should make now.
+swap you should make now — and a sealed brick in the strip is a warning that
+one of your columns is about to lose a cell.
 
 ## Running out of moves
 

@@ -18,6 +18,7 @@
 /// and by the scoring tiers instead, neither of which can strand the board.
 library;
 
+import 'difficulty_ramp.dart';
 import 'level_def.dart';
 
 /// Levels 1 through 20, in play order.
@@ -195,6 +196,10 @@ const List<LevelDef> levels = [
 
 /// Endless mode: no move budget and no objectives. A deadlock wipes the score
 /// and deals a fresh board, so the run only ever ends when the player stops.
+///
+/// The one mode on a difficulty ramp. With no level boundaries to pace it, the
+/// score is the only honest signal of how far in the player is, so that is
+/// what widens the comparison mix and lets the obstacle bricks in.
 const LevelDef endlessLevel = LevelDef(
   id: 0,
   moves: -1,
@@ -202,6 +207,7 @@ const LevelDef endlessLevel = LevelDef(
   operators: OperatorSet.tier3,
   objectives: [],
   starThresholds: [1000, 3000, 6000],
+  ramp: DifficultyRamp.endless,
 );
 
 /// Looks up a level by its [id], or null if there is no such level.

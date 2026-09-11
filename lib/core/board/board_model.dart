@@ -170,11 +170,16 @@ class BoardModel {
 
     final expanded = <Coord>{};
     for (final c in cells) {
-      final glyph = atCoord(c)?.glyph;
+      // `scanGlyph`, not `glyph`: an encased `=` still *reads* as `=` to the
+      // player, but it never fused into the match, so clearing it would take a
+      // brick the equation never used.
+      final glyph = atCoord(c)?.scanGlyph;
       if (glyph == '<' || glyph == '>' || glyph == '!') {
-        if (at(c.x + 1, c.y)?.glyph == '=') expanded.add(Coord(c.x + 1, c.y));
+        if (at(c.x + 1, c.y)?.scanGlyph == '=') {
+          expanded.add(Coord(c.x + 1, c.y));
+        }
       } else if (glyph == '=') {
-        final left = at(c.x - 1, c.y)?.glyph;
+        final left = at(c.x - 1, c.y)?.scanGlyph;
         if (left == '<' || left == '>' || left == '!') {
           expanded.add(Coord(c.x - 1, c.y));
         }
@@ -199,12 +204,32 @@ class BoardModel {
     return cells;
   }
 
-  /// How many cells hold an arithmetic or comparison glyph.
+  /// How many cells hold an arithmetic or comparison glyph, encased included.
+  ///
+  /// This is the *cap* figure. A brick under stone still occupies its cell and
+  /// will one day be an operator, so every crowding rule has to see it.
   int operatorCount() {
     var count = 0;
     for (var y = 0; y < height; y++) {
       for (var x = 0; x < width; x++) {
         if (isOperator(at(x, y))) count++;
+      }
+    }
+    return count;
+  }
+
+  /// How many operators the player could actually build a run through.
+  ///
+  /// This is the *floor* figure, and the asymmetry with [operatorCount] is the
+  /// point - the same split the preview queue already uses. The ceiling asks
+  /// "is the board crowded"; the floor asks "is there anything left to play
+  /// with", and an encased operator answers yes to the first and no to the
+  /// second.
+  int usableOperatorCount() {
+    var count = 0;
+    for (var y = 0; y < height; y++) {
+      for (var x = 0; x < width; x++) {
+        if (isUsableOperator(at(x, y))) count++;
       }
     }
     return count;
@@ -217,19 +242,39 @@ class BoardModel {
             if (at(x, y) == null) Coord(x, y),
       ];
 
-  /// How many cells hold a comparison glyph.
+  /// How many cells hold a comparison glyph the player can use.
   ///
   /// Tracked separately from [operatorCount] because comparisons are the
   /// resource the board can actually run out of: every match consumes exactly
-  /// one, and `+` or `-` cannot substitute.
+  /// one, and `+` or `-` cannot substitute. Encased ones do not count, for the
+  /// same reason they do not count toward [usableOperatorCount] - this number
+  /// only ever feeds a floor.
   int comparisonCount() {
     var count = 0;
     for (var y = 0; y < height; y++) {
       for (var x = 0; x < width; x++) {
-        if (at(x, y)?.kind == TileKind.comparison) count++;
+        final tile = at(x, y);
+        if (tile?.kind == TileKind.comparison && !tile!.isEncased) count++;
       }
     }
     return count;
+  }
+
+  /// How many usable comparison glyphs of each kind the board holds.
+  ///
+  /// Encased ones are left out for the same reason [comparisonCount] leaves
+  /// them out: this feeds the supply rules, and a sealed glyph is no supply.
+  Map<String, int> comparisonMix() {
+    final mix = <String, int>{};
+    for (var y = 0; y < height; y++) {
+      for (var x = 0; x < width; x++) {
+        final tile = at(x, y);
+        if (tile == null || tile.kind != TileKind.comparison) continue;
+        if (tile.isEncased) continue;
+        mix.update(tile.glyph, (v) => v + 1, ifAbsent: () => 1);
+      }
+    }
+    return mix;
   }
 
   /// How many orthogonal neighbours of [at] hold an operator.
@@ -283,6 +328,32 @@ class BoardModel {
             if (at(x, y)?.isBomb ?? false) Coord(x, y),
       ];
 
+  /// Coordinates of every electric currently on the board.
+  List<Coord> electricCells() => [
+        for (var y = 0; y < height; y++)
+          for (var x = 0; x < width; x++)
+            if (at(x, y)?.isElectric ?? false) Coord(x, y),
+      ];
+
+  /// Coordinates of every encased brick, whatever depth of casing.
+  List<Coord> encasedCells() => [
+        for (var y = 0; y < height; y++)
+          for (var x = 0; x < width; x++)
+            if (at(x, y)?.isEncased ?? false) Coord(x, y),
+      ];
+
+  /// Coordinates of every brick no equation can currently run through.
+  ///
+  /// Bombs, electrics and encased bricks together. The session budgets these
+  /// as one number: they are interchangeable as far as the board's remaining
+  /// supply of legal moves is concerned, and per-type caps let the total drift
+  /// until the board quietly stops offering anything.
+  List<Coord> obstacleCells() => [
+        for (var y = 0; y < height; y++)
+          for (var x = 0; x < width; x++)
+            if (at(x, y)?.isObstacle ?? false) Coord(x, y),
+      ];
+
   /// Empties [cells].
   void clear(Iterable<Coord> cells) {
     for (final c in cells) {
@@ -290,14 +361,93 @@ class BoardModel {
     }
   }
 
-  /// Thaws [cells] by removing the frozen state, leaving the tile on the board.
-  void thaw(Iterable<Coord> cells) {
+  /// Takes one layer of casing off each of [cells], leaving the brick in place.
+  ///
+  /// Returns the brick each cell is now holding - the tile itself, not just
+  /// the depth it is down to. That matters: the render layer replays a step
+  /// well after the model has compacted and refilled past it, so a cell
+  /// coordinate no longer identifies the brick that was hit. Handing back the
+  /// tile is what lets playback find the right component by id.
+  ///
+  /// Cells that are not encased are ignored.
+  Map<Coord, Tile> damage(Iterable<Coord> cells) {
+    final result = <Coord, Tile>{};
     for (final c in cells) {
       final tile = atCoord(c);
-      if (tile != null && tile.isFrozen) {
-        setCoord(c, tile.copyWith(isFrozen: false));
+      if (tile == null || !tile.isEncased) continue;
+      final next = tile.cracked();
+      setCoord(c, next);
+      result[c] = next;
+    }
+    return result;
+  }
+
+  /// Encased bricks orthogonally touching any of [cells].
+  ///
+  /// This is what turns a resolved equation into an impact: a run clearing
+  /// beside a stone brick is what breaks it. A `Set` return is doing real work
+  /// - a brick with three cleared neighbours still takes one hit, not three.
+  Set<Coord> encasedNeighboursOf(Iterable<Coord> cells) {
+    final hit = <Coord>{};
+    for (final c in cells) {
+      for (final n in [
+        Coord(c.x - 1, c.y),
+        Coord(c.x + 1, c.y),
+        Coord(c.x, c.y - 1),
+        Coord(c.x, c.y + 1),
+      ]) {
+        if (atCoord(n)?.isEncased ?? false) hit.add(n);
       }
     }
+    return hit;
+  }
+
+  /// Every cell whose brick shows [glyph].
+  ///
+  /// Matches on the *visible* glyph, so an electric sweeping the board finds
+  /// encased bricks too - what happens to them when it arrives is the
+  /// session's decision, and it is damage rather than destruction.
+  Set<Coord> cellsMatching(String glyph) {
+    final cells = <Coord>{};
+    for (var y = 0; y < height; y++) {
+      for (var x = 0; x < width; x++) {
+        final tile = at(x, y);
+        if (tile != null && !tile.isSpecial && tile.glyph == glyph) {
+          cells.add(Coord(x, y));
+        }
+      }
+    }
+    return cells;
+  }
+
+  /// The glyph appearing on the most bricks, ignoring specials.
+  ///
+  /// The electric's fallback target for a partner that has no glyph of its own.
+  /// Ties break on the lowest codepoint so a seeded run stays reproducible -
+  /// iteration order alone would not guarantee that.
+  String? mostCommonGlyph() {
+    final counts = <String, int>{};
+    for (var y = 0; y < height; y++) {
+      for (var x = 0; x < width; x++) {
+        final tile = at(x, y);
+        if (tile == null || tile.isSpecial) continue;
+        counts.update(tile.glyph, (v) => v + 1, ifAbsent: () => 1);
+      }
+    }
+    if (counts.isEmpty) return null;
+
+    String? best;
+    var bestCount = -1;
+    for (final entry in counts.entries) {
+      if (entry.value > bestCount ||
+          (entry.value == bestCount &&
+              best != null &&
+              entry.key.compareTo(best) < 0)) {
+        best = entry.key;
+        bestCount = entry.value;
+      }
+    }
+    return best;
   }
 
   /// Slides every tile down into the holes beneath it.
@@ -390,18 +540,34 @@ class BoardModel {
     final ids = TileIdGenerator.fromJson(json['ids'] as Map<String, dynamic>);
     final board = BoardModel(width: width, height: height, ids: ids);
 
+    // Tile ids must be unique across the board: the render layer keys its
+    // components by them, so a duplicate means two cells sharing one component
+    // and a view that can never agree with the model again.
+    //
+    // Repaired here rather than trusted, because this is the boundary where
+    // outside data comes in - and because saves written by earlier builds can
+    // genuinely contain duplicates: the generator used to be handed a fresh id
+    // counter on restore while the board kept the saved one, so every tile it
+    // minted collided with one already in play.
+    final seen = <int>{};
     final gridData = json['grid'] as List;
     for (var y = 0; y < height; y++) {
       final rowData = gridData[y] as List;
       for (var x = 0; x < width; x++) {
-        if (rowData[x] != null) {
-          board.set(
-            x,
-            y,
-            Tile.fromJson(rowData[x] as Map<String, dynamic>),
-          );
+        if (rowData[x] == null) continue;
+        var tile = Tile.fromJson(rowData[x] as Map<String, dynamic>);
+        if (!seen.add(tile.id)) {
+          tile = tile.copyWith(id: ids.nextId());
+          seen.add(tile.id);
         }
+        board.set(x, y, tile);
       }
+    }
+
+    // And the counter has to sit above everything on the board, however the
+    // save got written.
+    for (final id in seen) {
+      if (id >= ids.current) ids.restore(id + 1);
     }
     return board;
   }

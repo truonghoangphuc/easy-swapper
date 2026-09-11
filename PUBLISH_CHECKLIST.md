@@ -1,6 +1,7 @@
 # Easy Swapper — Publish Readiness Checklist
 
-Audited against the live tree on 2026-09-11.
+Audited against the live tree on 2026-09-11, and re-audited after the
+"Should Do" items were implemented the same day.
 
 ---
 
@@ -101,13 +102,35 @@ Change to `1.0.0+1` before submission. The build number (`+1`) must increase on 
 
 ## 🟡 Should Do Before First Submission
 
-- **App icon is configured but not generated yet.** The logo exists at `assets/images/easy_swapper_logo.png` (1024×1024 RGBA ✅) and `flutter_launcher_icons` is configured in `pubspec.yaml` — but `dart run flutter_launcher_icons` has not been run yet (Android still points at default `@mipmap/ic_launcher`). Run it.
-- **Portrait-only orientation not locked.** Common for this genre. Lock in `AndroidManifest.xml` and `Info.plist`.
-- **Ad consent (UMP) not implemented.** EEA/UK users require a Google-certified consent message for personalised ads. Either add the UMP SDK or serve non-personalised ads only.
-- **Rewarded ad not wired to gameplay.** `AdService.showRewardedAd` works but is never called. The natural hook is the deadlock dialog (offer a second chance in exchange for watching an ad).
-- **Level select not reachable.** 20 levels exist in `core/levels/level_data.dart` but only endless mode is accessible from the UI. Either wire the level select screen or ensure store copy describes the game as endless-only (current [STORE.md](file:///Users/phuc/Development/Projects/flutter/easy-swapper/easy-swapper/STORE.md) is already written for endless).
-- **Test on a low-end Android device.** Bricks paint nine gradients per frame; verify performance on a cheap phone.
-- **OFL licence text** for bundled fonts (Baloo 2, Sour Gummy) still needs to be placed in `assets/fonts/` alongside the font files.
+- **Test on a low-end Android device.** Not done — no device available here.
+  Each brick paints nine gradients, cached per colour so only flashing and
+  throbbing tiles rebuild them, and the solver runs ~112 board scans per settle
+  in a few milliseconds on desktop. Neither has been measured on a cheap phone.
+  This is the one item on the original list that cannot be closed from a
+  workstation.
+- **Fill in the font copyright lines.** `assets/fonts/OFL-Baloo2.txt` and
+  `OFL-SourGummy.txt` now carry the verbatim SIL OFL 1.1 text, but the
+  copyright line in each is a marked placeholder. It names real people and was
+  deliberately not guessed — copy it from each family's own `OFL.txt` on Google
+  Fonts. Everything else about the licensing obligation is satisfied.
+
+### Implemented since the audit
+
+| Item | What was done |
+|---|---|
+| Adaptive launcher icon | The square icon was generated but there was no `mipmap-anydpi-v26`, so Android 8+ letterboxed the logo into a white circle. Added `adaptive_icon_background` (`#0A0E16`), foreground and monochrome (Android 13 themed icons) with a 20% inset so the launcher's mask crops padding instead of artwork, and regenerated. |
+| Portrait lock | `android:screenOrientation="portrait"`, `UISupportedInterfaceOrientations` reduced to portrait on both iPhone and iPad, plus `SystemChrome.setPreferredOrientations` in `main`. `UIRequiresFullScreen = true` was needed too: an iPad app that supports Slide Over and Split View must support every orientation, so opting out of multitasking is what *permits* the lock. |
+| Ad consent (UMP) | New `lib/services/consent_service.dart`. Requests consent info, shows the form when required, and — the part that matters — **every ad request is now gated on `canRequestAds`**. Initialising the SDK early is fine; requesting an ad before UMP answers is the violation. A "Manage ad privacy choices" entry point appears in the help panel, but only when UMP says it is required. |
+| Banner retry outlasts the form | The banner gave up after 5 attempts over 10s. In the EEA a consent form is on screen for as long as the player reads it, and `AdService.banner` returns null throughout. Budget raised, and retrying now stops early when consent is *resolved and refused* — a decline costs one attempt, not twenty. |
+
+### Two claims in the original audit were already stale
+
+- **Rewarded ad is wired.** `lib/ui/overlays/deadlock_dialog.dart:27` calls
+  `AdService.showRewardedAd`, offering a board shuffle that keeps the score.
+- **Level select is reachable.** `lib/main.dart` opens `LevelSelectScreen`
+  unless a saved game is being resumed.
+
+Both were listed as outstanding; neither was.
 
 ---
 
@@ -124,6 +147,13 @@ Change to `1.0.0+1` before submission. The build number (`+1`) must increase on 
 | `flutter_launcher_icons` config | Configured in `pubspec.yaml` ✅ (but not yet run) |
 | Ad/leaderboard degrades on web/Windows | Banner collapses, leaderboard button hidden |
 | Store copy written | See [STORE.md](file:///Users/phuc/Development/Projects/flutter/easy-swapper/easy-swapper/STORE.md) |
+| Launcher icons | Generated for Android, iOS and web, with adaptive + monochrome variants |
+| Portrait lock | Android manifest, Info.plist (incl. iPad), and `SystemChrome` |
+| UMP consent | Implemented and gating every ad request |
+| OFL licence body | Verbatim OFL 1.1 in `assets/fonts/` (copyright line still to fill) |
+| Rewarded ad hooked up | Deadlock dialog offers a shuffle that keeps the score |
+| Level select reachable | `main.dart` → `LevelSelectScreen` |
+| Services bootstrapped in `main`, not in the game | Building a `SwapperGame` no longer reaches for the AdMob or UMP channels |
 | HUD overflow on small screens | Fixed — two-row layout (score/moves row + icons row) |
 
 ---

@@ -11,6 +11,7 @@ import '../board/move_solver.dart';
 import '../board/tile.dart';
 import '../board/tile_generator.dart';
 import '../board/tile_queue.dart';
+import '../levels/difficulty_ramp.dart';
 import '../levels/level_def.dart';
 import '../rules/scoring.dart';
 
@@ -43,8 +44,23 @@ enum SwapRejection {
   /// In the tutorial, only the correct hinted move is allowed.
   tutorialLock,
 
-  /// One of the tiles is frozen or stone and cannot be swapped.
+  /// One of the bricks is still encased and cannot be picked up.
   lockedTile,
+}
+
+/// One electric discharge: where it fired from and what it took.
+class Zap {
+  const Zap({required this.origin, required this.glyph, required this.targets});
+
+  /// The cell the electric was sitting in when it went off.
+  final Coord origin;
+
+  /// The glyph it swept for, or null when it took every digit - which is what
+  /// two electrics swapped together do.
+  final String? glyph;
+
+  /// Every cell it reached, encased bricks included.
+  final Set<Coord> targets;
 }
 
 /// One link in a cascade chain: what matched, what cleared, what moved.
@@ -53,13 +69,14 @@ class ResolveStep {
     required this.cascadeIndex,
     required this.matches,
     required this.cleared,
-    this.thawed = const {},
+    this.cracked = const {},
     required this.falls,
     required this.spawns,
     required this.baseScore,
     required this.multiplier,
     required this.feedback,
     this.detonations = const [],
+    this.zaps = const [],
   });
 
   /// 0 for the swap itself, 1 for the first cascade, and so on.
@@ -70,9 +87,14 @@ class ResolveStep {
 
   /// Cells that were removed from the board.
   final Set<Coord> cleared;
-  
-  /// Cells that were frozen and thawed out (remaining on the board).
-  final Set<Coord> thawed;
+
+  /// Encased bricks that took a hit, mapped to the brick each cell now holds.
+  /// An `armor` of zero means it came free and is ordinary from here on.
+  ///
+  /// The *tile*, not just the depth: by the time the render layer replays this
+  /// step the model has compacted and refilled past it, so the coordinate no
+  /// longer identifies the brick that was hit. The tile's id does.
+  final Map<Coord, Tile> cracked;
 
   /// The post-clear compaction.
   final List<TileFall> falls;
@@ -82,7 +104,15 @@ class ResolveStep {
   /// an ordinary equation step.
   final List<Coord> detonations;
 
+  /// Electric discharges in this step. Empty for anything else.
+  final List<Zap> zaps;
+
   bool get isBlast => detonations.isNotEmpty;
+
+  bool get isZap => zaps.isNotEmpty;
+
+  /// True for any power-up step, as opposed to a resolved equation.
+  bool get isDischarge => isBlast || isZap;
 
   /// Sum of the raw equation scores, before the cascade multiplier.
   final int baseScore;
@@ -122,18 +152,80 @@ class SwapResult {
   int get chainLength => steps.length;
 }
 
+/// What a refill or a queue slot is currently allowed to produce.
+///
+/// Every non-tokenizing brick - bomb, electric, encased - is a hole in the
+/// equations the player can still build, so they share one ceiling as well as
+/// having their own. Per-type caps alone let the total drift upward until the
+/// board quietly stops offering moves, which on this game costs the run's
+/// whole score.
+class _ObstacleBudget {
+  _ObstacleBudget({
+    required this.stage,
+    required this.bombs,
+    required this.electrics,
+    required this.encased,
+    required this.diamonds,
+  });
+
+  final DifficultyStage stage;
+  int bombs;
+  int electrics;
+  int encased;
+  int diamonds;
+
+  int get total => bombs + electrics + encased;
+
+  bool get _hasRoom => total < stage.maxObstacles;
+
+  bool get canBomb => _hasRoom && bombs < GameSession.maxBombsOnBoard;
+
+  bool get canElectric =>
+      _hasRoom &&
+      stage.electricChance > 0 &&
+      electrics < GameSession.maxElectricsOnBoard;
+
+  /// Deepest casing this slot may carry: none, stone, or diamond.
+  int get casingAllowance {
+    if (!_hasRoom || encased >= stage.maxEncased) return Armor.none;
+    return diamonds < stage.maxDiamonds ? Armor.diamond : Armor.stone;
+  }
+
+  /// Books [tile] against the budget, whatever it turned out to be.
+  void record(Tile tile) {
+    if (tile.isBomb) bombs++;
+    if (tile.isElectric) electrics++;
+    if (tile.isEncased) {
+      encased++;
+      if (tile.armor >= Armor.diamond) diamonds++;
+    }
+  }
+}
+
 /// One playthrough of one level.
 class GameSession {
   GameSession({required this.level, required this.generator, BoardModel? board})
-      : board = board ??
-            generator.generateBoard(
-              width: level.width,
-              height: level.height,
-              minRunLength: level.minRunLength,
-            ) {
+      : board = board ?? _openingBoard(level, generator) {
+    _applyRamp();
     // Primed here, not on the first refill: the preview is on screen from the
     // moment the board is, and an empty strip would read as a bug.
     replenishQueue();
+  }
+
+  /// Deals the first board, with the ramp already applied.
+  ///
+  /// The order matters and it is easy to get wrong: the board used to be built
+  /// in the initialiser list, which runs *before* the constructor body, so the
+  /// opening board of every endless run was drawn from the default weights
+  /// rather than from stage zero of its own ramp. Measured, that put `=` at
+  /// 88% of the comparison glyphs on a board whose stage asks for 50%.
+  static BoardModel _openingBoard(LevelDef level, TileGenerator generator) {
+    generator.applyStage(level.ramp.stages.first);
+    return generator.generateBoard(
+      width: level.width,
+      height: level.height,
+      minRunLength: level.minRunLength,
+    );
   }
 
   final LevelDef level;
@@ -144,25 +236,21 @@ class GameSession {
   /// drop. Primed on the first turn and topped up after every one.
   late final TileQueue queue = TileQueue(board.width);
 
-  /// How many tiles the preview commits to in advance.
+  /// Which rung of [LevelDef.ramp] this run is on.
   ///
-  /// This is a direct trade against playability, and the tool measures it: every
-  /// committed tile is one the refill can no longer adapt to the cell it lands
-  /// in. Anything past the queue falls through to the live fill, which can.
-  /// Four, not a full row. The sweep in `tool/tune_weights.dart playout` is
-  /// unambiguous: every committed tile is one the refill can no longer place
-  /// intelligently, and at a full row of eight the board lost roughly half its
-  /// playable life and most of its operator spacing. Four covers a typical
-  /// turn's holes while leaving the tail adaptive.
-  /// The preview holds one tile per column, so its length is the board width.
+  /// Derived purely from [score], so it needs no persisting and a deadlock
+  /// wipe rolls it back to the start for free.
+  int stageIndex = 0;
+
+  DifficultyStage get stage => level.ramp.stages[stageIndex];
 
   /// How many operators the preview may hold at once, regardless of how long
   /// the preview is.
   ///
-  /// Deliberately not a fraction of [previewLength]: tying the two together
+  /// Deliberately not a fraction of the preview length: tying the two together
   /// meant a longer preview also allowed a bigger restock burst, and four
   /// comparisons landing in one turn cannot all find a cell with room - they
-  /// arrive as a clump. Two at a time gets the same supply in, spread over
+  /// arrive as a clump. One at a time gets the same supply in, spread over
   /// turns, into cells that can hold them apart.
   static const int maxOperatorBurst = 1;
 
@@ -173,6 +261,14 @@ class GameSession {
   int equationsCleared = 0;
   int longestChain = 0;
   int bombsDetonated = 0;
+
+  /// How many electrics the player has set off.
+  int electricsFired = 0;
+
+  /// How many casings have been broken through, and how many bricks that has
+  /// actually set free. A diamond costs two of the first for one of the second.
+  int casingsCracked = 0;
+  int bricksFreed = 0;
 
   /// The score the last wiped run reached.
   ///
@@ -196,6 +292,12 @@ class GameSession {
   /// the player can still form. Three is enough to feel available without
   /// starving the board of matches.
   static const int maxBombsOnBoard = 3;
+
+  /// How many electrics may sit on the board at once.
+  ///
+  /// Lower than the bomb cap. An electric can take a dozen bricks at once, so
+  /// two waiting is already a large reserve.
+  static const int maxElectricsOnBoard = 2;
 
   int get movesRemaining => level.isEndless ? -1 : level.moves - movesUsed;
 
@@ -240,6 +342,16 @@ class GameSession {
   /// True if this is the very first move of Level 1.
   bool get isTutorialActive => level.id == 1 && score == 0;
 
+  /// Moves the generator onto whichever stage the current score sits in.
+  ///
+  /// Called after every score change and after a wipe. Cheap and idempotent -
+  /// the generator only rebuilds its draw table when the stage really changed.
+  void _applyRamp() {
+    final next = level.ramp.indexFor(score);
+    stageIndex = next;
+    generator.applyStage(level.ramp.stages[next]);
+  }
+
   /// Attempts a swap and returns the resolution trace.
   ///
   /// If the swap is valid it is applied, the cascades are resolved - and the board
@@ -252,14 +364,11 @@ class GameSession {
     if (!a.isAdjacentTo(b)) {
       return const SwapResult.rejected(SwapRejection.notAdjacent);
     }
-    
-    final tileA = board.atCoord(a);
-    final tileB = board.atCoord(b);
-    if ((tileA != null && (tileA.isFrozen || tileA.isStone)) ||
-        (tileB != null && (tileB.isFrozen || tileB.isStone))) {
-      // Treat as wrongPhase or a new rejection type? Let's just use notAdjacent or wrongPhase.
-      // Wait, let's use noMatch so it nudges and rejects, or add a new rejection reason.
-      // We can just add `lockedTile` to SwapRejection.
+
+    // An encased brick is pinned until its casing breaks - unless a power-up
+    // is doing the breaking. `move_solver` shares this predicate, so the hint
+    // and the deadlock check can never disagree with what is actually allowed.
+    if (!canSwapPair(board.atCoord(a), board.atCoord(b))) {
       return const SwapResult.rejected(SwapRejection.lockedTile);
     }
 
@@ -274,18 +383,22 @@ class GameSession {
 
     board.swap(a, b);
 
-    // A bomb goes off wherever it lands, so a swap involving one is legal even
+    // A power-up fires wherever it lands, so a swap involving one is legal even
     // though it completes nothing.
     final bombs = [
       for (final cell in [a, b])
         if (board.atCoord(cell)?.isBomb ?? false) cell,
+    ];
+    final electrics = [
+      for (final cell in [a, b])
+        if (board.atCoord(cell)?.isElectric ?? false) cell,
     ];
 
     // Only the swapped rows and columns can have changed, because the board was
     // settled and match-free before this call.
     var matches =
         board.findMatchesAffectedBy(a, b, minRunLength: level.minRunLength);
-    if (matches.isEmpty && bombs.isEmpty) {
+    if (matches.isEmpty && bombs.isEmpty && electrics.isEmpty) {
       board.swap(a, b);
       return const SwapResult.rejected(SwapRejection.noMatch);
     }
@@ -296,11 +409,19 @@ class GameSession {
     final steps = <ResolveStep>[];
     var cascadeIndex = 0;
 
-    if (bombs.isNotEmpty) {
-      // The blast resolves first and on its own. It clears cells any equation
-      // in the swapped lines would have used, so those are rescanned afterwards
-      // as an ordinary cascade rather than being scored twice.
-      steps.add(_detonate(bombs, cascadeIndex));
+    if (bombs.isNotEmpty || electrics.isNotEmpty) {
+      // The discharge resolves first and on its own. It clears cells any
+      // equation in the swapped lines would have used, so those are rescanned
+      // afterwards as an ordinary cascade rather than being scored twice.
+      steps.add(
+        _discharge(
+          bombs: bombs,
+          electrics: electrics,
+          a: a,
+          b: b,
+          cascadeIndex: cascadeIndex,
+        ),
+      );
       matches = board.findMatches(minRunLength: level.minRunLength);
       cascadeIndex++;
     }
@@ -320,20 +441,40 @@ class GameSession {
     return SwapResult.accepted(steps: steps, boardReset: wasReset);
   }
 
-  ResolveStep _resolve(List<BoardMatch> matches, int cascadeIndex) {
-    final toClear = board.cellsToClear(matches);
+  /// What one set of struck cells does to the board.
+  ///
+  /// Splits [hit] into bricks that clear and encased bricks that only take
+  /// damage, then adds the encased neighbours of everything that cleared -
+  /// which is what makes a resolved equation an *impact* on the stone sitting
+  /// next to it.
+  ///
+  /// A brick with three cleared neighbours still takes one hit, not three: the
+  /// working set is a [Set], and that is doing real work.
+  ({Set<Coord> cleared, Map<Coord, Tile> cracked, int bonus}) _applyImpact(
+    Set<Coord> hit,
+  ) {
     final cleared = <Coord>{};
-    final thawed = <Coord>{};
+    final struck = <Coord>{};
+    for (final cell in hit) {
+      final tile = board.atCoord(cell);
+      if (tile == null) continue;
+      (tile.isEncased ? struck : cleared).add(cell);
+    }
+    struck.addAll(board.encasedNeighboursOf(cleared));
 
-    for (final c in toClear) {
-      final tile = board.atCoord(c);
-      if (tile != null && tile.isFrozen) {
-        thawed.add(c);
-      } else {
-        cleared.add(c);
-      }
+    final cracked = board.damage(struck);
+    var bonus = 0;
+    for (final tile in cracked.values) {
+      bonus += scoreCrack(tile.armor).score;
+      casingsCracked++;
+      if (tile.armor == Armor.none) bricksFreed++;
     }
 
+    board.clear(cleared);
+    return (cleared: cleared, cracked: cracked, bonus: bonus);
+  }
+
+  ResolveStep _resolve(List<BoardMatch> matches, int cascadeIndex) {
     var baseScore = 0;
     var feedback = '';
     var longest = 0;
@@ -352,20 +493,30 @@ class GameSession {
       }
     }
 
-    final multiplier =
-        (cascadeIndex + 1).clamp(1, maxCascadeMultiplier);
-    score += baseScore * multiplier;
+    final impact = _applyImpact(board.cellsToClear(matches));
 
-    board.clear(cleared);
-    board.thaw(thawed);
+    final multiplier = (cascadeIndex + 1).clamp(1, maxCascadeMultiplier);
+    // The casing bonus is flat, not multiplied: a cascade earns its multiplier
+    // by chaining equations, and cracking stone on the way is incidental.
+    score += baseScore * multiplier + impact.bonus;
+    _applyRamp();
+
+    if (feedback.isEmpty && impact.cracked.isNotEmpty) {
+      // The shallowest casing left is the best news in the step: if anything
+      // came free, that is what the player should be told about.
+      feedback = scoreCrack(
+        impact.cracked.values.map((t) => t.armor).reduce((a, b) => a < b ? a : b),
+      ).feedback;
+    }
+
     final falls = board.compact();
     final spawns = _refill();
 
     return ResolveStep(
       cascadeIndex: cascadeIndex,
       matches: matches,
-      cleared: cleared,
-      thawed: thawed,
+      cleared: impact.cleared,
+      cracked: impact.cracked,
       falls: falls,
       spawns: spawns,
       baseScore: baseScore,
@@ -374,53 +525,158 @@ class GameSession {
     );
   }
 
-  /// Sets off every bomb in [origins], plus any bomb caught in the blast.
+  /// Fires every power-up caught up in one swap, as a single event.
   ///
-  /// Blast cells are not equations, so they do not advance the equation-count
-  /// or operator objectives - a bomb is a shortcut, not a solve.
-  ResolveStep _detonate(List<Coord> origins, int cascadeIndex) {
+  /// Bombs and electrics resolve together rather than in sequence because a
+  /// bomb that is still on the board after an electric has compacted and
+  /// refilled around it is no longer where its coordinate says it is. Taking
+  /// the union of what each would destroy and clearing once sidesteps that
+  /// entirely, and it is what makes a bomb-into-electric swap do both things.
+  ///
+  /// Neither a blast nor a discharge is an equation, so neither advances the
+  /// equation-count or operator objectives - a power-up is a shortcut, not a
+  /// solve.
+  ResolveStep _discharge({
+    required List<Coord> bombs,
+    required List<Coord> electrics,
+    required Coord a,
+    required Coord b,
+    required int cascadeIndex,
+  }) {
     final detonated = <Coord>[];
+    final blast = <Coord>{};
     final seen = <Coord>{};
-    final cells = <Coord>{};
 
-    final queue = [...origins];
-    while (queue.isNotEmpty) {
-      final origin = queue.removeAt(0);
+    // Electrics that will fire: the ones swapped, plus any a blast reaches.
+    // Bombs have always chained into bombs, but an electric swept by a blast
+    // used to be cleared in silence - which destroyed the rarest brick on the
+    // board for nothing. A blast now sets off everything it touches.
+    final firing = <Coord>[...electrics];
+
+    final pending = [...bombs];
+    while (pending.isNotEmpty) {
+      final origin = pending.removeAt(0);
       if (!seen.add(origin)) continue;
       detonated.add(origin);
 
       for (final cell in board.blastCells(origin)) {
-        cells.add(cell);
-        // Chain into any other bomb the blast touches.
-        if ((board.atCoord(cell)?.isBomb ?? false) && !seen.contains(cell)) {
-          queue.add(cell);
+        blast.add(cell);
+        final tile = board.atCoord(cell);
+        if (tile == null) continue;
+        if (tile.isBomb && !seen.contains(cell)) {
+          pending.add(cell);
+        } else if (tile.isElectric && !firing.contains(cell)) {
+          firing.add(cell);
         }
       }
     }
 
-    final scored = scoreBlast(cells.length);
-    bombsDetonated += detonated.length;
-    score += scored.score;
+    final zaps = <Zap>[];
+    final zapped = <Coord>{};
 
-    board.clear(cells);
+    // Two electrics swapped into each other fire as one event - the classic
+    // double, which takes every digit - rather than as two sweeps.
+    final pairSwapped = electrics.length == 2;
+
+    for (final origin in firing) {
+      if (pairSwapped && origin == electrics.last) continue;
+
+      // A swapped electric targets the brick it displaced. One set off by a
+      // blast has no partner, so it falls back to the commonest glyph, the
+      // same way a swap into another power-up does.
+      final Coord? partnerCell = pairSwapped
+          ? null
+          : origin == a
+              ? b
+              : origin == b
+                  ? a
+                  : null;
+      final sweep = electricSweep(
+        board,
+        partner: partnerCell == null ? null : board.atCoord(partnerCell),
+        bothElectric: pairSwapped,
+      );
+      zapped.addAll(sweep.cells);
+      zaps.add(Zap(origin: origin, glyph: sweep.glyph, targets: sweep.cells));
+    }
+
+    // Every electric involved is spent, including the second of a pair.
+    zapped.addAll(firing);
+    electricsFired += firing.length;
+
+    bombsDetonated += detonated.length;
+
+    final impact = _applyImpact({...blast, ...zapped});
+
+    // Each power-up is paid for what it actually destroyed, and each cell is
+    // paid once.
+    //
+    // Counting the raw sweeps instead overpaid twice over: an encased brick
+    // caught in a blast survives it, yet was billed at the full per-cell rate
+    // *and* again as a casing broken - a nine-cell cross over five stone
+    // bricks scored 75 for destroying four of them. A cell in both a cross and
+    // a discharge was charged to both as well. The casing bonus in
+    // [_applyImpact] is the only thing a surviving brick earns.
+    final blastCells = blast.intersection(impact.cleared);
+    final zapCells = zapped.intersection(impact.cleared).difference(blastCells);
+
+    final scoredBlast = detonated.isEmpty ? null : scoreBlast(blastCells.length);
+    final scoredZap = zaps.isEmpty ? null : scoreElectric(zapCells.length);
+
+    final base =
+        (scoredBlast?.score ?? 0) + (scoredZap?.score ?? 0) + impact.bonus;
+    score += base;
+    _applyRamp();
+
+    // Whichever half was the bigger event gets to name it.
+    final feedback = (scoredZap?.score ?? 0) >= (scoredBlast?.score ?? 0)
+        ? (scoredZap?.feedback ?? '')
+        : (scoredBlast?.feedback ?? '');
+
     final falls = board.compact();
     final spawns = _refill();
 
     return ResolveStep(
       cascadeIndex: cascadeIndex,
       matches: const [],
-      cleared: cells,
+      cleared: impact.cleared,
+      cracked: impact.cracked,
       falls: falls,
       spawns: spawns,
-      baseScore: scored.score,
+      baseScore: base,
       multiplier: 1,
-      feedback: scored.feedback,
+      feedback: feedback,
       detonations: detonated,
+      zaps: zaps,
     );
   }
 
+  /// Counts what is already committed, on the board and in the preview.
+  _ObstacleBudget _budget({Iterable<Tile> pending = const []}) {
+    final budget = _ObstacleBudget(
+      stage: stage,
+      bombs: board.bombCells().length + queue.bombCount(),
+      electrics: board.electricCells().length + queue.electricCount(),
+      encased: board.encasedCells().length + queue.encasedCount(),
+      diamonds: _diamondsOnBoard() + queue.diamondCount(),
+    );
+    for (final tile in pending) {
+      budget.record(tile);
+    }
+    return budget;
+  }
+
+  int _diamondsOnBoard() {
+    var count = 0;
+    for (final cell in board.encasedCells()) {
+      if ((board.atCoord(cell)?.armor ?? 0) >= Armor.diamond) count++;
+    }
+    return count;
+  }
+
   /// Refills the board, holding the same composition rules generation does:
-  /// bombs capped, operators under budget, and as few side by side as possible.
+  /// obstacles capped, operators under budget, and as few side by side as
+  /// possible.
   ///
   /// Each column's first hole receives the tile the preview promised it. That
   /// commitment is made a turn early, so the refill cannot vet a queued tile
@@ -457,23 +713,28 @@ class GameSession {
       );
 
     // Everything the assignment will place counts from the start. The fill
-    // interleaves assigned cells with live ones, so counting a queued bomb only
-    // when its cell comes up let a live cell slip one in first and put four on
-    // a board capped at three.
-    var bombs = board.bombCells().length +
-        assignment.values.where((t) => t.isBomb).length;
-    var operators =
+    // interleaves assigned cells with live ones, so counting a queued obstacle
+    // only when its cell comes up let a live cell slip one in first and put
+    // four on a board capped at three.
+    final budget = _budget(pending: assignment.values);
+
+    // Two operator counts, on purpose. The ceiling sees encased operators -
+    // they crowd the board and they will come free one day. The floors do not:
+    // an operator the player cannot reach is no supply at all.
+    var capOperators =
         board.operatorCount() + assignment.values.where(isOperator).length;
+    final usableOperators = board.usableOperatorCount() +
+        assignment.values.where(isUsableOperator).length;
 
     final needComparison =
         generator.comparisonFloorFor(board.width, board.height) -
             board.comparisonCount() -
             assignment.values
-                .where((t) => t.kind == TileKind.comparison)
+                .where((t) => t.kind == TileKind.comparison && !t.isEncased)
                 .length;
     final needOperator =
-        generator.operatorFloorFor(board.width, board.height) - operators;
-    final spare = (cap - operators).clamp(0, cap);
+        generator.operatorFloorFor(board.width, board.height) - usableOperators;
+    final spare = (cap - capOperators).clamp(0, cap);
 
     final comparisonSlots = _planSlots(
       unplanned,
@@ -490,6 +751,17 @@ class GameSession {
       relaxIfShort: false,
     );
 
+    // The comparison mix the board will be left holding, updated as slots are
+    // committed. Top-ups are drawn against this rather than blind, because
+    // matches consume inequalities much faster than equality and a blind draw
+    // leaves the board silting up with `=`.
+    final mix = board.comparisonMix();
+    for (final tile in assignment.values) {
+      if (tile.kind == TileKind.comparison && !tile.isEncased) {
+        mix.update(tile.glyph, (v) => v + 1, ifAbsent: () => 1);
+      }
+    }
+
     final reserved = {
       ...comparisonSlots,
       ...operatorSlots,
@@ -501,13 +773,22 @@ class GameSession {
       final promised = assignment[at];
       if (promised != null) return promised;
 
+      // A floor top-up is never encased. These exist precisely to keep the
+      // board playable, and sealing one under stone defeats the whole point of
+      // planting it.
       if (comparisonSlots.contains(at)) {
-        operators++;
-        return generator.nextComparison();
+        capOperators++;
+        final tile = generator.nextComparisonFor(mix);
+        mix.update(tile.glyph, (v) => v + 1, ifAbsent: () => 1);
+        return tile;
       }
       if (operatorSlots.contains(at)) {
-        operators++;
-        return generator.nextOperator();
+        capOperators++;
+        final tile = generator.nextOperator();
+        if (tile.kind == TileKind.comparison) {
+          mix.update(tile.glyph, (v) => v + 1, ifAbsent: () => 1);
+        }
+        return tile;
       }
 
       // A reserved slot is an operator that has not landed yet, so it counts as
@@ -516,11 +797,13 @@ class GameSession {
           !reserved.any(at.isAdjacentTo);
 
       final tile = generator.nextRefillTile(
-        allowBomb: bombs + queue.bombCount() < maxBombsOnBoard,
-        allowOperator: operators < cap && clear,
+        allowBomb: budget.canBomb,
+        allowElectric: budget.canElectric,
+        allowOperator: capOperators < cap && clear,
+        maxCasing: budget.casingAllowance,
       );
-      if (tile.isBomb) bombs++;
-      if (isOperator(tile)) operators++;
+      budget.record(tile);
+      if (isOperator(tile)) capOperators++;
       return tile;
     });
 
@@ -540,8 +823,7 @@ class GameSession {
   /// Budgets use opposite accounting on purpose. The cap counts the board *plus*
   /// the queue, so committed tiles can never overshoot it - between queueing and
   /// dropping a board only ever loses operators, to matches. The floors count
-  /// the board alone: a queued operator has not landed yet, and treating it as
-  /// if it had left the board starved while the queue held the difference.
+  /// the board alone, and only the operators on it the player can actually use.
   void replenishQueue() {
     final columns = queue.emptyColumns();
     if (columns.isEmpty) return;
@@ -554,7 +836,7 @@ class GameSession {
 
     var operators = board.operatorCount() + queue.operatorCount();
     var comparisons = board.comparisonCount();
-    var boardOperators = board.operatorCount();
+    var usableOperators = board.usableOperatorCount();
 
     // How many of these slots should carry an operator, and how many of those
     // must be comparisons.
@@ -568,7 +850,7 @@ class GameSession {
         wantOperator++;
         continue;
       }
-      if (boardOperators + wantOperator < operatorFloor) {
+      if (usableOperators + wantOperator < operatorFloor) {
         wantOperator++;
         continue;
       }
@@ -579,30 +861,52 @@ class GameSession {
     final ranked = [...columns]
       ..sort((a, b) => board.columnCrowding(a).compareTo(board.columnCrowding(b)));
 
+    final budget = _budget();
+    final mix = board.comparisonMix();
+    queue.comparisonMix().forEach((glyph, count) {
+      mix.update(glyph, (v) => v + count, ifAbsent: () => count);
+    });
+
     for (var i = 0; i < ranked.length; i++) {
       final column = ranked[i];
       if (i < wantComparison) {
-        queue.fill(column, generator.nextComparison());
+        final tile = generator.nextComparisonFor(mix);
+        mix.update(tile.glyph, (v) => v + 1, ifAbsent: () => 1);
+        queue.fill(column, tile);
         comparisons++;
         operators++;
-        boardOperators++;
+        usableOperators++;
         continue;
       }
       if (i < wantOperator) {
         final tile = generator.nextOperator();
-        if (tile.kind == TileKind.comparison) comparisons++;
+        if (tile.kind == TileKind.comparison) {
+          comparisons++;
+          mix.update(tile.glyph, (v) => v + 1, ifAbsent: () => 1);
+        }
         queue.fill(column, tile);
         operators++;
-        boardOperators++;
+        usableOperators++;
         continue;
       }
 
-      if (board.bombCells().length + queue.bombCount() < maxBombsOnBoard &&
-          generator.rng.nextDouble() < generator.bombChance) {
-        queue.fill(column, Tile.bomb(generator.ids.nextId()));
-        continue;
-      }
-      queue.fill(column, generator.nextDigit());
+      // The digit slots are where obstacles get in. A queued one is visible in
+      // the preview a turn before it lands, which is the warning the player
+      // needs to plan around it.
+      final tile = generator.nextRefillTile(
+        allowBomb: budget.canBomb,
+        allowElectric: budget.canElectric,
+        allowOperator: false,
+        // Wildcards stay a live-fill draw. A queued one costs a digit slot,
+        // and digits are what an equation is mostly made of - measured, that
+        // alone pushed operator adjacency from 51.5% to 52.9%. Obstacles are
+        // worth queueing because the preview warns the player about them a
+        // turn early; a wildcard needs no warning.
+        allowWildcard: false,
+        maxCasing: budget.casingAllowance,
+      );
+      budget.record(tile);
+      queue.fill(column, tile);
     }
   }
 
@@ -674,31 +978,28 @@ class GameSession {
     equationsCleared = 0;
     longestChain = 0;
     bombsDetonated = 0;
+    electricsFired = 0;
+    casingsCracked = 0;
+    bricksFreed = 0;
     operatorUses.clear();
     runsByLength.clear();
     if (!level.isEndless) movesUsed = 0;
 
-    final fresh = generator.generateBoard(
-      width: board.width,
-      height: board.height,
-      minRunLength: level.minRunLength,
-    );
-    for (var y = 0; y < board.height; y++) {
-      for (var x = 0; x < board.width; x++) {
-        board.set(x, y, fresh.at(x, y));
-      }
-    }
-
-    queue.clear();
-    replenishQueue();
+    // Back to the opening stage, because the ramp reads the score and the
+    // score is gone. Has to happen before the board is dealt: the fresh board
+    // is drawn from whichever distribution is current.
+    _applyRamp();
+    _dealFreshBoard();
   }
 
   /// Reshuffles the board with a fresh layout while **keeping** the current
   /// score. Called as the reward for watching a rewarded ad on deadlock.
   ///
   /// Structurally identical to [resetAfterDeadlock] but does not touch score,
-  /// chain stats, or [lastRunScore].
-  void shuffleBoard() {
+  /// chain stats, or [lastRunScore] - and so does not touch the ramp either.
+  void shuffleBoard() => _dealFreshBoard();
+
+  void _dealFreshBoard() {
     final fresh = generator.generateBoard(
       width: board.width,
       height: board.height,
@@ -709,6 +1010,7 @@ class GameSession {
         board.set(x, y, fresh.at(x, y));
       }
     }
+
     queue.clear();
     replenishQueue();
   }
@@ -737,6 +1039,9 @@ class GameSession {
         'equationsCleared': equationsCleared,
         'longestChain': longestChain,
         'bombsDetonated': bombsDetonated,
+        'electricsFired': electricsFired,
+        'casingsCracked': casingsCracked,
+        'bricksFreed': bricksFreed,
         'lastRunScore': lastRunScore,
         'operatorUses': operatorUses,
         'runsByLength':
@@ -751,6 +1056,15 @@ class GameSession {
     LevelDef level,
   ) {
     final board = BoardModel.fromJson(json['board'] as Map<String, dynamic>);
+
+    // The board restores its own id counter from the save; the generator
+    // handed in here was built fresh and starts at zero. Left alone, every
+    // tile it mints collides with one already on the board - and since the
+    // render layer keys its components by tile id, the board and the screen
+    // disagree from that point on and the view rebuilds itself, all
+    // sixty-four components, after every single turn.
+    generator.ids = board.ids;
+
     final session = GameSession(
       level: level,
       generator: generator,
@@ -770,6 +1084,9 @@ class GameSession {
     session.equationsCleared = json['equationsCleared'] as int;
     session.longestChain = json['longestChain'] as int;
     session.bombsDetonated = json['bombsDetonated'] as int;
+    session.electricsFired = json['electricsFired'] as int? ?? 0;
+    session.casingsCracked = json['casingsCracked'] as int? ?? 0;
+    session.bricksFreed = json['bricksFreed'] as int? ?? 0;
     session.lastRunScore = json['lastRunScore'] as int;
 
     if (json['operatorUses'] != null) {
@@ -783,6 +1100,8 @@ class GameSession {
             entry.value as int;
       }
     }
+    // The restored score decides the stage, so this must come after it is set.
+    session._applyRamp();
     return session;
   }
 }
