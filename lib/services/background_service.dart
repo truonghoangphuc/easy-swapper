@@ -8,12 +8,16 @@ import 'package:flutter/foundation.dart';
 
 /// All available backgrounds, in the order they cycle.
 const List<String> _backgrounds = [
-  'assets/images/bg.jpg',       // Math/geometry (default)
-  'assets/images/bg_space.jpg', // Space nebula
-  'assets/images/bg_ocean.jpg', // Deep ocean
-  'assets/images/bg_lava.jpg',  // Lava cave
-  'assets/images/bg_forest.jpg',// Enchanted forest
-  'assets/images/bg_circuit.jpg',// Cyberpunk circuit
+  'assets/images/bg.jpg',          // Math/geometry (default)
+  'assets/images/bg_space.jpg',    // Space nebula
+  'assets/images/bg_ocean.jpg',    // Deep ocean
+  'assets/images/bg_lava.jpg',     // Lava cave
+  'assets/images/bg_forest.jpg',   // Enchanted forest
+  'assets/images/bg_circuit.jpg',  // Cyberpunk circuit
+  'assets/images/bg_abyss.jpg',    // Bioluminescent abyss
+  'assets/images/bg_neon_city.jpg',// Neon city storm
+  'assets/images/bg_ruins.jpg',    // Ancient ruins
+  'assets/images/bg_aurora.jpg',   // Frozen aurora
 ];
 
 /// Score points to accumulate before the background rotates to the next one.
